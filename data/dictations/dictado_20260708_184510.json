@@ -1,0 +1,14 @@
+{
+  "text": "hola esto debería decir como que cargando modelo al iniciar o algo parecido pero funcionaría ya de una vez",
+  "language": "es",
+  "duration": 9.0453125,
+  "model": "turbo",
+  "created_at": "2026-07-08T18:45:10.625476",
+  "segments": [
+    {
+      "start": 1.58,
+      "end": 8.94,
+      "text": "hola esto debería decir como que cargando modelo al iniciar o algo parecido pero funcionaría ya de una vez"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "text": "Prueba sobre que una vez hecha la transcripción se queda en el clipboard prueba 1.",
+  "language": "es",
+  "duration": 5.696,
+  "model": "turbo",
+  "created_at": "2026-07-08T19:39:47.306560",
+  "segments": [
+    {
+      "start": 1.17,
+      "end": 5.55,
+      "text": "Prueba sobre que una vez hecha la transcripción se queda en el clipboard prueba 1."
+    }
+  ]
+}

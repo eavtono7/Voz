@@ -1,0 +1,14 @@
+{
+  "text": "¡Danke!",
+  "language": "es",
+  "duration": 1.4293125,
+  "model": "turbo",
+  "created_at": "2026-07-08T19:28:48.066654",
+  "segments": [
+    {
+      "start": 0.3,
+      "end": 1.08,
+      "text": "¡Danke!"
+    }
+  ]
+}

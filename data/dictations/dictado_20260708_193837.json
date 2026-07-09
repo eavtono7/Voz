@@ -1,0 +1,99 @@
+{
+  "text": "ok vamos a empezar con las observaciones primero quiero verificar que cuando se ejecute la aplicación no parezca un cmd en blanco no lo primero segundo quisiera confirmar si es que se está copiando en el clipboard una vez hecha la transcripción la última después tengo una aplicación que me ayuda a sacar screenshots y yo la activo apretando f9 apretó f9 y no está bloqueado salgo de la ventana o la cierro y apretó f9 y otra vez me sale la aplicación o sea quisiera que funcione f9 para mi aplicación de screenshots y f10 para este dictado no con este dictado está abierto entonces eso después preguntar sobre si puedo estar trabajando en otra cosa darle play un vídeo y esto sigue grabando si es que ya lo iniciado y por último tenía una observación más porque pesa tanto si es que y pesa como 5 gb todo esto entonces demasiado si hay una forma de optimizarlo y de nuevo es como que ir recortando cosas que creo que han funcionado o sea como que a la hora de diseñar está siendo un poco optimista quiero reducir el escopo muchísimo y que sea así una herramienta útil digamos y también tal vez ver dinámicas de desempeño sé por qué pesa tanto esto se carga en la ram que tanto ocupa estamos utilizando el modelo turbo entonces como que tal vez información mostrar más información respecto a este proyecto y optimizarlo pesa mucho y tal vez como que si te hace el sacar el modelo te empieza en la transcripción pero que no que no lo guarden el archivo no con como que has grabado esto este día no no no no no no no no ahorita que sea solamente únicamente dictado por el momento porque quería igual que cargar archivos ya no que sea todo por dictado y ya en el momento y listo serían todas mis observaciones para esta versión",
+  "language": "es",
+  "duration": 126.442625,
+  "model": "turbo",
+  "created_at": "2026-07-08T19:38:37.230709",
+  "segments": [
+    {
+      "start": 0.88,
+      "end": 7.06,
+      "text": "ok vamos a empezar con las observaciones primero quiero verificar que cuando se ejecute la"
+    },
+    {
+      "start": 7.06,
+      "end": 14.38,
+      "text": "aplicación no parezca un cmd en blanco no lo primero segundo quisiera confirmar si es que"
+    },
+    {
+      "start": 14.38,
+      "end": 21.85,
+      "text": "se está copiando en el clipboard una vez hecha la transcripción la última después tengo una"
+    },
+    {
+      "start": 21.85,
+      "end": 29.86,
+      "text": "aplicación que me ayuda a sacar screenshots y yo la activo apretando f9 apretó f9 y no está"
+    },
+    {
+      "start": 29.86,
+      "end": 36.46,
+      "text": "bloqueado salgo de la ventana o la cierro y apretó f9 y otra vez me sale la aplicación o sea quisiera"
+    },
+    {
+      "start": 36.46,
+      "end": 43.24,
+      "text": "que funcione f9 para mi aplicación de screenshots y f10 para este dictado no con este dictado está"
+    },
+    {
+      "start": 43.24,
+      "end": 51.2,
+      "text": "abierto entonces eso después preguntar sobre si puedo estar trabajando en otra cosa darle play un"
+    },
+    {
+      "start": 51.2,
+      "end": 59.22,
+      "text": "vídeo y esto sigue grabando si es que ya lo iniciado y por último tenía una observación más porque pesa"
+    },
+    {
+      "start": 59.22,
+      "end": 66.54,
+      "text": "tanto si es que y pesa como 5 gb todo esto entonces demasiado si hay una forma de optimizarlo y de"
+    },
+    {
+      "start": 66.54,
+      "end": 75.03,
+      "text": "nuevo es como que ir recortando cosas que creo que han funcionado o sea como que a la hora de diseñar"
+    },
+    {
+      "start": 75.03,
+      "end": 81.54,
+      "text": "está siendo un poco optimista quiero reducir el escopo muchísimo y que sea así una herramienta útil"
+    },
+    {
+      "start": 81.54,
+      "end": 89.66,
+      "text": "digamos y también tal vez ver dinámicas de desempeño sé por qué pesa tanto esto se carga en la ram que"
+    },
+    {
+      "start": 89.66,
+      "end": 94.98,
+      "text": "tanto ocupa estamos utilizando el modelo turbo entonces como que tal vez información mostrar más"
+    },
+    {
+      "start": 94.98,
+      "end": 102.75,
+      "text": "información respecto a este proyecto y optimizarlo pesa mucho y tal vez como que si te hace el sacar"
+    },
+    {
+      "start": 102.75,
+      "end": 107.67,
+      "text": "el modelo te empieza en la transcripción pero que no que no lo guarden el archivo no con como que"
+    },
+    {
+      "start": 107.67,
+      "end": 113.51,
+      "text": "has grabado esto este día no no no no no no no no ahorita que sea solamente únicamente dictado por el"
+    },
+    {
+      "start": 113.51,
+      "end": 122.18,
+      "text": "momento porque quería igual que cargar archivos ya no que sea todo por dictado y ya en el momento y"
+    },
+    {
+      "start": 122.18,
+      "end": 126.14,
+      "text": "listo serían todas mis observaciones para esta versión"
+    }
+  ]
+}

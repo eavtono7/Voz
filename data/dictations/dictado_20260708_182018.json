@@ -1,0 +1,29 @@
+{
+  "text": "esto creo grabación iniciada habla ahora esto está mucho mejor entonces bueno aquí te lo voy a dar mis observaciones en esta vez que ejecutado el python punto main punto pi no me abierto el wizard para la configuración pero está bien en la observación es cuando inicia el wizard se abre cmd igual y no muestra nada entonces no quiero que aparezca nada el cmd y esto creo que está mucho mejor",
+  "language": "es",
+  "duration": 26.0693125,
+  "model": "turbo",
+  "created_at": "2026-07-08T18:20:18.236832",
+  "segments": [
+    {
+      "start": 0.82,
+      "end": 8.06,
+      "text": "esto creo grabación iniciada habla ahora esto está mucho mejor entonces bueno aquí te lo voy"
+    },
+    {
+      "start": 8.06,
+      "end": 14.94,
+      "text": "a dar mis observaciones en esta vez que ejecutado el python punto main punto pi no me abierto el"
+    },
+    {
+      "start": 14.94,
+      "end": 19.58,
+      "text": "wizard para la configuración pero está bien en la observación es cuando inicia el wizard se abre"
+    },
+    {
+      "start": 19.58,
+      "end": 25.6,
+      "text": "cmd igual y no muestra nada entonces no quiero que aparezca nada el cmd y esto creo que está mucho mejor"
+    }
+  ]
+}

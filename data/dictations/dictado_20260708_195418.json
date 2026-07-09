@@ -1,0 +1,34 @@
+{
+  "text": "Hola Fer, te cuento que he estado haciendo esto toda la tarde con inteligencia artificial y ya funcionó. Supuestamente la idea era hacer una herramienta pequeña en 15 minutos o media hora, pero me tomó toda la tarde. Pero está interesante, ahora voy a poner a trabajar y supongo que ahorita estás en casa de Lu pasando tu diplomado, entonces pásala bien, que todo salga bien y hablamos cuando puedas. Te voy respondiendo los mensajes.",
+  "language": "es",
+  "duration": 27.712,
+  "model": "turbo",
+  "created_at": "2026-07-08T19:54:18.965114",
+  "segments": [
+    {
+      "start": 1.2,
+      "end": 7.62,
+      "text": "Hola Fer, te cuento que he estado haciendo esto toda la tarde con inteligencia artificial y ya funcionó."
+    },
+    {
+      "start": 8.2,
+      "end": 13.26,
+      "text": "Supuestamente la idea era hacer una herramienta pequeña en 15 minutos o media hora, pero me tomó toda la tarde."
+    },
+    {
+      "start": 14.24,
+      "end": 20.84,
+      "text": "Pero está interesante, ahora voy a poner a trabajar y supongo que ahorita estás en casa de Lu pasando tu diplomado,"
+    },
+    {
+      "start": 20.96,
+      "end": 24.24,
+      "text": "entonces pásala bien, que todo salga bien y hablamos cuando puedas."
+    },
+    {
+      "start": 24.24,
+      "end": 26.62,
+      "text": "Te voy respondiendo los mensajes."
+    }
+  ]
+}

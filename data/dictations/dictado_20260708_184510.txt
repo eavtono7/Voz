@@ -1,0 +1,1 @@
+hola esto debería decir como que cargando modelo al iniciar o algo parecido pero funcionaría ya de una vez

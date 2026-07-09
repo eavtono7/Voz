@@ -1,0 +1,19 @@
+{
+  "text": "Le dicté con Ian, no con ella Esta cosa todavía hace huevadas",
+  "language": "es",
+  "duration": 4.736,
+  "model": "turbo",
+  "created_at": "2026-07-08T19:52:01.262365",
+  "segments": [
+    {
+      "start": 0.3,
+      "end": 2.54,
+      "text": "Le dicté con Ian, no con ella"
+    },
+    {
+      "start": 2.54,
+      "end": 4.62,
+      "text": "Esta cosa todavía hace huevadas"
+    }
+  ]
+}

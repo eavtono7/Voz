@@ -1,0 +1,1 @@
+No entiendo que pasa, se cierra en el PowerShell
