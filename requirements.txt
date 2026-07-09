@@ -1,0 +1,19 @@
+# ── Core dependencies ──────────────────────────────────────────────────────
+faster-whisper>=1.0.0          # Speech-to-text engine
+numpy>=1.26.0                  # Audio array manipulation
+sounddevice>=0.5.0             # Microphone capture
+soundfile>=0.12.0              # Audio file I/O (wav, flac, ogg)
+av>=10.0.0                     # Audio file I/O (mp3, m4a)
+scipy>=1.12.0                  # Audio resampling
+
+# ── GUI & UX ───────────────────────────────────────────────────────────────
+pynput>=1.7.0                  # Global F10 hotkey
+pyperclip>=1.8.0               # System clipboard
+pystray>=0.19.0                # System tray icon
+Pillow>=10.0.0                 # Tray icon bitmap
+
+# ── Utilities ──────────────────────────────────────────────────────────────
+tqdm>=4.66.0                   # CLI progress bar
+
+# ── Build ──────────────────────────────────────────────────────────────────
+pyinstaller>=6.0.0             # .exe generation

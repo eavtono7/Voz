@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+*.egg
+.venv/
+env/
+
+# Build output
+dist/
+build/
+*.pyz
+
+# Models (se descargan solos)
+models/
+
+# Data (se genera solo)
+data/dictaciones/
+data/logs/
+data/output/
+data/voz.log
+
+# Cache de HuggingFace
+.cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
