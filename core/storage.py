@@ -10,9 +10,7 @@ format in the future, add it here – the rest of the codebase stays untouched.
 
 from __future__ import annotations
 
-import json
 import logging
-from datetime import datetime
 from pathlib import Path
 from typing import Tuple
 
@@ -78,23 +76,8 @@ class Storage:
         """Write JSON with full metadata + segments."""
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            data = {
-                "text": result.text,
-                "language": result.language,
-                "duration": result.duration,
-                "model": result.model,
-                "created_at": (
-                    result.created_at.isoformat()
-                    if isinstance(result.created_at, datetime)
-                    else result.created_at
-                ),
-                "segments": [
-                    {"start": s.start, "end": s.end, "text": s.text}
-                    for s in result.segments
-                ],
-            }
             path.write_text(
-                json.dumps(data, indent=2, ensure_ascii=False),
+                result.to_json(),
                 encoding="utf-8",
             )
             logger.debug("Wrote JSON: %s", path.name)

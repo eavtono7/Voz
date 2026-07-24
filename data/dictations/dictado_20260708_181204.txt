@@ -1,1 +1,0 @@
-Creo que ya funciona, pero no está mostrando estados, pero ya da alguna señal de vida mínimamente. Y no sé cuánto esto puede tardar, pero debería estar mejorando. Ayúdame a divulgar esto, ya estoy cansado de tanta prueba y error y mis tokens se están gastando. Hay que ser mucho más eficientes.

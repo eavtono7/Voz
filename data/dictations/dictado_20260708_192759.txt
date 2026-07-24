@@ -1,1 +1,0 @@
-Estimados, buenas tardes. Creo que los formatos que tenemos están bien para Abastecedora, si Rogelio no me contradice. Los formatos deben ser por Cedis, es decir, si soy Ana y estoy en Querétaro, los formatos deben ser solo para Querétaro, que no elijan en el desplegable. Es decir, que cada formato tiene que hacer 7 variantes iguales, uno por cada Cedis.

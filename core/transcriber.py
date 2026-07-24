@@ -67,7 +67,7 @@ class Transcriber:
 
             from faster_whisper import WhisperModel
 
-            if not self._is_model_cached():
+            if not self.is_model_cached():
                 logger.info("Model not cached locally — will download first")
             else:
                 logger.info("Model cached locally — loading from disk")
@@ -95,16 +95,40 @@ class Transcriber:
                     f"Failed to load model '{self.model_name}': {exc}"
                 ) from exc
 
-    def _is_model_cached(self) -> bool:
-        """Check if the model files are already downloaded on disk."""
+    @property
+    def is_model_loaded(self) -> bool:
+        """Return True if the Whisper model is already loaded in memory."""
+        return self._model is not None
+
+    def is_model_cached(self) -> bool:
+        """Check if the model files are already downloaded on disk.
+
+        Works with any model by scanning for huggingface cache directories
+        or direct-download model files under MODEL_DIR.
+        """
         model_dir = config.MODEL_DIR
-        # HuggingFace hub cache format: model.bin inside snapshots/<hash>/
-        hub_pattern = model_dir / "models--mobiuslabsgmbh--faster-whisper-large-v3-turbo" / "snapshots"
-        if hub_pattern.exists():
-            for snap_dir in hub_pattern.iterdir():
+
+        hub_root = model_dir / "models--mobiuslabsgmbh--faster-whisper-large-v3-turbo"
+        snapshots = hub_root / "snapshots"
+        if snapshots.exists():
+            for snap_dir in snapshots.iterdir():
                 if snap_dir.is_dir() and (snap_dir / "model.bin").exists():
                     return True
-        # Direct download format: model.bin at root of MODEL_DIR
+
+        snapshots_turbo = model_dir / "models--Systran--faster-whisper-large-v3" / "snapshots"
+        if snapshots_turbo.exists():
+            for snap_dir in snapshots_turbo.iterdir():
+                if snap_dir.is_dir() and (snap_dir / "model.bin").exists():
+                    return True
+
+        for candidate in model_dir.glob("models--*"):
+            if candidate.is_dir():
+                snaps = candidate / "snapshots"
+                if snaps.exists():
+                    for snap_dir in snaps.iterdir():
+                        if snap_dir.is_dir() and (snap_dir / "model.bin").exists():
+                            return True
+
         if (model_dir / "model.bin").exists():
             return True
         return False
@@ -279,8 +303,7 @@ def _resample(
     if orig_sr == target_sr:
         return audio
 
-    duration = len(audio) / orig_sr
-    num_samples = int(duration * target_sr)
+    num_samples = int(len(audio) * target_sr / orig_sr)
     resampled = signal.resample(audio, num_samples)
     logger.debug("Resampled %d→%d Hz  %d→%d samples", orig_sr, target_sr, len(audio), num_samples)
     return resampled.astype(np.float32)

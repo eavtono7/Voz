@@ -12,10 +12,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class ClipboardError(Exception):
-    """Raised when clipboard operations fail."""
-
-
 class Clipboard:
     """Copy text to the system clipboard."""
 

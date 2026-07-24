@@ -37,14 +37,18 @@ AUTO_COPY: bool = True
 AUTO_SAVE: bool = True
 MICROPHONE_DEVICE: Optional[int] = None  # None = system default
 
-# ── Paths (resolved at init()) ────────────────────────────────────────────────
+# ── Whitelist of valid config keys ─────────────────────────────────────────────
+_CONFIG_KEYS = {
+    "MODEL", "DEVICE", "COMPUTE_TYPE", "LANGUAGE", "SAMPLE_RATE",
+    "CHANNELS", "HOTKEY", "AUTO_COPY", "AUTO_SAVE", "MICROPHONE_DEVICE",
+}
 
-BASE_DIR: Path  # Project root or directory containing voz.exe
-MODEL_DIR: Path  # Where Whisper models are cached (outside .exe)
-OUTPUT_DIR: Path  # Batch transcription output
-DICTATIONS_DIR: Path  # Dictation session logs
-CONFIG_PATH: Path  # Path to config.json
-LOG_PATH: Path  # Path to voz.log
+BASE_DIR: Path = Path(".")  # Project root or directory containing voz.exe
+MODEL_DIR: Path = Path(".")  # Where Whisper models are cached (outside .exe)
+OUTPUT_DIR: Path = Path(".")  # Batch transcription output
+DICTATIONS_DIR: Path = Path(".")  # Dictation session logs
+CONFIG_PATH: Path = Path(".")  # Path to config.json
+LOG_PATH: Path = Path(".")  # Path to voz.log
 
 
 def init() -> None:
@@ -56,6 +60,7 @@ def init() -> None:
     global BASE_DIR, MODEL_DIR, OUTPUT_DIR, DICTATIONS_DIR, CONFIG_PATH, LOG_PATH
     global MODEL, DEVICE, COMPUTE_TYPE, LANGUAGE, HOTKEY
     global AUTO_COPY, AUTO_SAVE, MICROPHONE_DEVICE
+    global SAMPLE_RATE, CHANNELS
 
     # ── Detect environment ────────────────────────────────────────────────
     if getattr(sys, "frozen", False):
@@ -83,14 +88,16 @@ def init() -> None:
         try:
             raw = CONFIG_PATH.read_text(encoding="utf-8")
             data = json.loads(raw)
-            MODEL = data.get("model", MODEL)
-            DEVICE = data.get("device", DEVICE)
-            COMPUTE_TYPE = data.get("compute_type", COMPUTE_TYPE)
+            MODEL = _validate_str(data.get("model"), "model", MODEL)
+            DEVICE = _validate_str(data.get("device"), "device", DEVICE)
+            COMPUTE_TYPE = _validate_str(data.get("compute_type"), "compute_type", COMPUTE_TYPE)
             LANGUAGE = data.get("language", LANGUAGE)
-            HOTKEY = data.get("hotkey", HOTKEY)
-            AUTO_COPY = data.get("auto_copy", AUTO_COPY)
-            AUTO_SAVE = data.get("auto_save", AUTO_SAVE)
+            HOTKEY = _validate_str(data.get("hotkey"), "hotkey", HOTKEY)
+            AUTO_COPY = bool(data.get("auto_copy", AUTO_COPY))
+            AUTO_SAVE = bool(data.get("auto_save", AUTO_SAVE))
             MICROPHONE_DEVICE = data.get("microphone_device", MICROPHONE_DEVICE)
+            SAMPLE_RATE = _validate_positive_int(data.get("sample_rate"), "sample_rate", SAMPLE_RATE)
+            CHANNELS = _validate_positive_int(data.get("channels"), "channels", CHANNELS)
             logger.info("Config loaded from %s", CONFIG_PATH)
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Failed to load config (%s); using defaults", exc)
@@ -112,6 +119,8 @@ def save() -> bool:
         "auto_copy": AUTO_COPY,
         "auto_save": AUTO_SAVE,
         "microphone_device": MICROPHONE_DEVICE,
+        "sample_rate": SAMPLE_RATE,
+        "channels": CHANNELS,
     }
     try:
         CONFIG_PATH.write_text(
@@ -129,10 +138,27 @@ def update(**kwargs) -> None:
     """Update config values at runtime without touching disk.
 
     Call save() afterwards if you want to persist.
+    Only keys in the _CONFIG_KEYS whitelist are accepted.
     """
     for key, value in kwargs.items():
-        if key in globals():
-            globals()[key] = value
-            logger.debug("Config updated: %s = %r", key, value)
-        else:
-            logger.warning("Unknown config key: %s", key)
+        if key not in _CONFIG_KEYS:
+            logger.warning("Unknown config key (ignored): %s", key)
+            continue
+        globals()[key] = value
+        logger.debug("Config updated: %s = %r", key, value)
+
+
+def _validate_str(value: object, name: str, default: str) -> str:
+    """Return *value* if it is a non-empty string, otherwise *default*."""
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    logger.warning("Invalid config value for '%s' (%r), using default: %s", name, value, default)
+    return default
+
+
+def _validate_positive_int(value: object, name: str, default: int) -> int:
+    """Return *value* if it is a positive integer, otherwise *default*."""
+    if isinstance(value, int) and value > 0:
+        return value
+    logger.warning("Invalid config value for '%s' (%r), using default: %d", name, value, default)
+    return default

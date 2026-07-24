@@ -35,6 +35,7 @@ class HotkeyListener:
     def __init__(self, callback: Callable[[], None]) -> None:
         self._callback = callback
         self._key_name: str | None = None
+        self._key = None
         self._listener = None
         self._last_call: float = 0.0
 
@@ -48,6 +49,7 @@ class HotkeyListener:
         if key is None:
             raise HotkeyListenerError(f"Unsupported hotkey: {hotkey}")
 
+        self._key = key
         self._listener = keyboard.Listener(on_release=self._on_release)
         self._listener.daemon = True
         self._listener.start()
@@ -55,13 +57,10 @@ class HotkeyListener:
 
     def _on_release(self, key) -> None:
         """Handle key-release events (ignores auto-repeat)."""
-        from pynput import keyboard
-
-        if self._key_name is None:
+        if self._key is None or self._key_name is None:
             return
 
-        target = getattr(keyboard.Key, self._key_name.lower(), None)
-        if key == target:
+        if key == self._key:
             logger.debug("Hotkey %s released", self._key_name)
             now = time.monotonic()
             if (now - self._last_call) * 1000 < _DEBOUNCE_MS:

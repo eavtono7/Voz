@@ -70,7 +70,6 @@ class App(tk.Tk):
         self._state: str = "idle"
         self._last_duration: float = 0.0
         self._session_count: int = 0
-        self._running: bool = True
 
         # ── Core modules (no file I/O, no mic access on init) ────────────
         self._recorder = Recorder(device=config.MICROPHONE_DEVICE)
@@ -106,8 +105,7 @@ class App(tk.Tk):
     def _apply_theme(self) -> None:
         """Global dark-theme styles."""
         self.configure(bg="#1e1e1e")
-        style = self.tk.call("ttk::style", "theme", "use", "clam")
-        # We apply colours directly via tk widget options instead.
+        self.tk.call("ttk::style", "theme", "use", "clam")
 
     def _build_ui(self) -> None:
         """Create all widgets."""
@@ -206,7 +204,6 @@ class App(tk.Tk):
             self._hotkey.start(config.HOTKEY)
         except HotkeyListenerError as exc:
             logger.error("Hotkey not available: %s", exc)
-            from tkinter import messagebox
             messagebox.showwarning(
                 "Tecla rápida no disponible",
                 f"No se pudo registrar la tecla {config.HOTKEY}.\n\n"
@@ -326,8 +323,8 @@ class App(tk.Tk):
         logger.info("_worker_transcribe started, audio samples: %d", len(audio))
         try:
             # Check if model is already loaded
-            if self._transcriber._model is None:
-                if self._transcriber._is_model_cached():
+            if not self._transcriber.is_model_loaded:
+                if self._transcriber.is_model_cached():
                     msg = "⏳  Cargando modelo Whisper en RAM. Primera carga ~3 minutos en CPU..."
                 else:
                     msg = "⬇️  Descargando modelo Whisper (~1.5 GB). Tiempo variable según tu internet..."
@@ -468,7 +465,8 @@ class App(tk.Tk):
     def _on_settings_saved(self) -> None:
         """Recreate modules that depend on changed config values."""
         self._recorder = Recorder(device=config.MICROPHONE_DEVICE)
-        self._transcriber = Transcriber()
+        if self._transcriber.model_name != config.MODEL:
+            self._transcriber = Transcriber()
         self._storage = Storage(config.DICTATIONS_DIR)
         try:
             self._hotkey.restart(config.HOTKEY)
@@ -483,7 +481,7 @@ class App(tk.Tk):
     def _flash(self, msg: str) -> None:
         """Show a temporary message in the status bar (2.5 s)."""
         self._status_lbl.configure(text=msg, fg="#4ec9b0")
-        self.after(2_500, lambda: self._set_state("idle") if self._state == "idle" else None)
+        self.after(2_500, lambda: self._set_state(self._state))
 
     def _on_close(self) -> None:
         """Close button → stop recording if active and exit."""
@@ -492,10 +490,16 @@ class App(tk.Tk):
                 self._recorder.stop()
             except Exception:
                 pass
-        
+
+        if (
+            self._transcription_thread is not None
+            and self._transcription_thread.is_alive()
+        ):
+            self._transcription_thread.join(timeout=3)
+
         if hasattr(self, "_hotkey"):
             self._hotkey.stop()
-        
+
         self.destroy()
 
     def run(self) -> None:
@@ -512,7 +516,7 @@ class App(tk.Tk):
         try:
             self.mainloop()
         except KeyboardInterrupt:
-            self._quit_app()
+            self._on_close()
         finally:
             logger.info("Application shut down")
 
@@ -522,18 +526,19 @@ class App(tk.Tk):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def _run_first_run_wizard() -> None:
+def _run_first_run_wizard(parent: tk.Tk) -> None:
     """Guided setup on first launch (config.json does not exist yet)."""
-    wizard = tk.Tk()
+    wizard = tk.Toplevel(parent)
     wizard.title("Bienvenido a Voz")
     wizard.geometry("560x520")
     wizard.resizable(False, False)
     wizard.configure(bg="#1e1e1e")
+    wizard.transient(parent)
+    wizard.grab_set()
 
-    # Centre
-    wizard.update_idletasks()
-    x = (wizard.winfo_screenwidth() - 480) // 2
-    y = (wizard.winfo_screenheight() - 420) // 2
+    wizard_width, wizard_height = 560, 520
+    x = (wizard.winfo_screenwidth() - wizard_width) // 2
+    y = (wizard.winfo_screenheight() - wizard_height) // 2
     wizard.geometry(f"+{x}+{y}")
 
     # ── Variables ────────────────────────────────────────────────────────
@@ -629,6 +634,7 @@ def _run_first_run_wizard() -> None:
         if not config.save():
             from tkinter import messagebox
             messagebox.showerror("Error", "No se pudo guardar la configuración.")
+            return
         wizard.destroy()
 
     tk.Button(
@@ -641,7 +647,7 @@ def _run_first_run_wizard() -> None:
         activebackground="#3da890",
     ).pack(pady=(15, 0))
 
-    wizard.mainloop()
+    parent.wait_window(wizard)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -652,15 +658,21 @@ def _run_first_run_wizard() -> None:
 def main() -> None:
     """Launch the GUI application.
 
-    Always shows the setup wizard on startup.
+    Shows the setup wizard only on first launch.
     """
     logger.info("Starting GUI main()")
-    logger.info("Showing setup wizard")
-    _run_first_run_wizard()
-    config.init()  # reload saved values
-    logger.info("Wizard completed, config reloaded")
 
-    logger.info("Creating App instance...")
-    app = App()
+    if not config.CONFIG_PATH.exists():
+        logger.info("First launch detected – showing setup wizard")
+        app = App()
+        app.withdraw()
+        _run_first_run_wizard(app)
+        config.init()
+        app._on_settings_saved()
+    else:
+        logger.info("Config found – launching directly")
+        app = App()
+
     logger.info("App created, starting mainloop")
+    app.deiconify()
     app.run()

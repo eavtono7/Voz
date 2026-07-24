@@ -1,10 +1,12 @@
 {
-  "model": "turbo",
+  "model": "base",
   "device": "cpu",
   "compute_type": "int8",
-  "language": "es",
-  "hotkey": "F10",
+  "language": "fr",
+  "hotkey": "F11",
   "auto_copy": true,
   "auto_save": true,
-  "microphone_device": 14
+  "microphone_device": 14,
+  "sample_rate": 16000,
+  "channels": 1
 }
