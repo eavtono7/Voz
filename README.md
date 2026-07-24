@@ -4,13 +4,13 @@ Voz es una herramienta de dictado por voz que ejecuta **Whisper** localmente med
 
 ## ⚡ Cómo funciona
 
-1. **Abrís Voz** → wizard de configuración (idioma + micrófono)
+1. **Abrís Voz** → primera vez: ventana de Configuración para elegir idioma y micrófono
 2. **F10** para empezar a grabar (incluso si la ventana está minimizada)
 3. **F10** otra vez para detener
 4. Whisper transcribe automáticamente
 5. El texto se copia al **portapapeles** y se guarda en `data/dictations/`
 6. **F10** funciona incluso si la app está minimizada
-7. Cerrar la ventana → cierra el programa completamente (sin bandeja)
+7. Cerrar la ventana → cierra el programa completamente
 
 ## 📦 Requisitos
 
@@ -23,7 +23,7 @@ Voz es una herramienta de dictado por voz que ejecuta **Whisper** localmente med
 
 1. Descargar la carpeta `dist/voz/` completa (incluye `voz.exe` + `_internal/`)
 2. Ejecutar `voz.exe` con doble clic (no requiere instalación)
-3. Presionar **F10** para comenzar — la primera vez descarga el modelo Whisper (~1.5 GB)
+3. Presionar **F10** para comenzar — el modelo se precarga al iniciar la app
 
 ### Para distribución
 
@@ -63,6 +63,12 @@ voz/
 │   ├── dictation_app.py     ← Ventana principal + state machine
 │   ├── settings_window.py   ← Ventana de configuración
 │   └── hotkey_listener.py   ← Tecla global F10 (pynput)
+├── tests/                   ← Tests unitarios y de smoke (37 tests)
+│   ├── test_models.py
+│   ├── test_clipboard.py
+│   ├── test_storage.py
+│   ├── test_config.py
+│   └── test_smoke.py
 ├── data/
     │   ├── dictations/          ← Transcripciones guardadas (.json + .txt)
 │   └── voz.log              ← Log de actividad
@@ -77,7 +83,7 @@ voz/
 | **Separación de capas** | `core/` = lógica pura (no sabe de GUI), `gui/` = interfaz (no sabe de micrófono) |
 | **State machine** | Estados: `idle → recording → transcribing → copying → storing → done → idle` |
 | **Thread safety** | Transcripción en hilo separado, comunicación con GUI via `event_generate` |
-| **Lazy loading** | Modelo Whisper se carga en primera transcripción, no al iniciar |
+| **Precarga del modelo** | Whisper se carga en background al iniciar para que la primera transcripción sea instantánea |
 | **Config centralizada** | Todos los valores mágicos en `core/config.py` |
 
 ## 🧠 Tecnologías
@@ -127,9 +133,9 @@ Equipo de prueba: **Beelink Ryzen 7 7840HS, 32 GB RAM, Windows 11**
 | **Temperatura CPU** | ~75-80°C durante transcripción intensiva |
 
 > ⚠️ **Primer uso del modelo**
-> 1. **Descarga**: Al primer F10, Whisper descarga ~1.5 GB desde HuggingFace. Tiempo variable según internet (5-30+ min).
-> 2. **Carga en RAM**: Una vez descargado, cada vez que iniciás Voz por primera vez, el modelo tarda ~3 minutos en cargarse en memoria (compilación CTranslate2).
-> 3. **Ya en uso**: Después de cargado, las transcripciones son casi instantáneas (~14 s para 60 s de audio).
+> 1. **Descarga**: Al primer inicio, Whisper descarga ~1.5 GB desde HuggingFace en background. Tiempo variable según internet.
+> 2. **Carga en RAM**: Cada inicio, el modelo se precarga automáticamente mientras ves la ventana principal lista.
+> 3. **Ya en uso**: Transcripciones casi instantáneas (~4 s para 5 s de audio en CPU moderna).
 
 ## 🐛 Solución de problemas
 
