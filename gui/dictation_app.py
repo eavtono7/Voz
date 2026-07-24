@@ -113,6 +113,21 @@ class App(tk.Tk):
         main = tk.Frame(self, bg="#1e1e1e")
         main.pack(fill="both", expand=True, padx=12, pady=12)
 
+        # ── Header banner ────────────────────────────────────────────────
+        banner = tk.Label(
+            main,
+            text=(
+                "\u25A0  V O Z    D i c t a d o   p o r   v o z"
+            ),
+            bg="#1e1e1e",
+            fg="#4ec9b0",
+            font=("Consolas", 10, "bold"),
+        )
+        banner.pack(pady=(0, 6))
+
+        sep = tk.Frame(main, bg="#3a3a3a", height=1)
+        sep.pack(fill="x", pady=(0, 8))
+
         # ── Text area ────────────────────────────────────────────────────
         txt_container = tk.Frame(main, bg="#2d2d2d")
         txt_container.pack(fill="both", expand=True)
@@ -322,13 +337,6 @@ class App(tk.Tk):
         """Run faster-whisper in a background thread."""
         logger.info("_worker_transcribe started, audio samples: %d", len(audio))
         try:
-            if not self._transcriber.is_model_loaded:
-                if self._transcriber.is_model_cached():
-                    msg = "Cargando modelo Whisper en RAM (~1-3 min)..."
-                else:
-                    msg = "Descargando modelo Whisper (~1.5 GB). Espera..."
-                self.after(0, self._flash_status, msg, "#dcdcaa")
-            
             logger.debug("Calling transcriber.transcribe()")
             result = self._transcriber.transcribe(audio)
             logger.info("Transcription completed, text length: %d", len(result.text))
@@ -526,22 +534,11 @@ class App(tk.Tk):
         if self._transcriber.is_model_loaded:
             return
 
-        cached = self._transcriber.is_model_cached()
-        msg = (
-            "Cargando modelo Whisper en RAM..."
-            if cached
-            else "Descargando modelo Whisper (~1.5 GB)..."
-        )
-        self._flash_status(msg, "#dcdcaa")
-
         def _load() -> None:
             try:
                 self._transcriber.preload()
-                self.after(0, self._flash_status, "Modelo listo", "#4ec9b0")
-                self.after(2_000, lambda: self._set_state(self._state))
             except Exception as exc:
-                logger.error("Model preload failed: %s", exc)
-                self.after(0, self._flash_status, f"Error al cargar modelo: {exc}", "#f44747")
+                logger.warning("Model preload failed (will retry on first dictation): %s", exc)
 
         threading.Thread(target=_load, daemon=True).start()
 
