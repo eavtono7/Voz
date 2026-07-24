@@ -100,6 +100,13 @@ class Transcriber:
         """Return True if the Whisper model is already loaded in memory."""
         return self._model is not None
 
+    def preload(self) -> None:
+        """Trigger model download + load (may block for minutes on first call).
+
+        Safe to call from any thread; subsequent calls are no-ops.
+        """
+        self._load_model()
+
     def is_model_cached(self) -> bool:
         """Check if the model files are already downloaded on disk.
 

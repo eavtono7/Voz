@@ -322,15 +322,12 @@ class App(tk.Tk):
         """Run faster-whisper in a background thread."""
         logger.info("_worker_transcribe started, audio samples: %d", len(audio))
         try:
-            # Check if model is already loaded
             if not self._transcriber.is_model_loaded:
                 if self._transcriber.is_model_cached():
-                    msg = "⏳  Cargando modelo Whisper en RAM. Primera carga ~3 minutos en CPU..."
+                    msg = "Cargando modelo Whisper en RAM (~1-3 min)..."
                 else:
-                    msg = "⬇️  Descargando modelo Whisper (~1.5 GB). Tiempo variable según tu internet..."
-                self.after(0, self._log_status, msg)
-                self.after(0, lambda: self._status_lbl.configure(text=msg, fg="#dcdcaa"))
-                self.after(0, self.update_idletasks)
+                    msg = "Descargando modelo Whisper (~1.5 GB). Espera..."
+                self.after(0, self._flash_status, msg, "#dcdcaa")
             
             logger.debug("Calling transcriber.transcribe()")
             result = self._transcriber.transcribe(audio)
@@ -474,9 +471,11 @@ class App(tk.Tk):
             logger.error("Failed to restart hotkey: %s", exc)
         self._flash("⚙️  Configuración actualizada")
 
-    # ═══════════════════════════════════════════════════════════════════════
-    # Flash helper & close
-    # ═══════════════════════════════════════════════════════════════════════
+    def _flash_status(self, msg: str, color: str | None = None) -> None:
+        """Update status bar and log the message atomically (prevents UI freeze)."""
+        color = color or self.STATUS_COLOR.get(self._state, "#e0e0e0")
+        self._status_lbl.configure(text=msg, fg=color)
+        self._log_status(msg)
 
     def _flash(self, msg: str) -> None:
         """Show a temporary message in the status bar (2.5 s)."""
@@ -512,13 +511,39 @@ class App(tk.Tk):
         self.after(100, lambda: self.attributes('-topmost', False))
         logger.info("Window state: %s", self.state())
         logger.info("Window geometry: %s", self.geometry())
-        
+
+        self._preload_model()
+
         try:
             self.mainloop()
         except KeyboardInterrupt:
             self._on_close()
         finally:
             logger.info("Application shut down")
+
+    def _preload_model(self) -> None:
+        """Start background model loading so the first dictation is fast."""
+        if self._transcriber.is_model_loaded:
+            return
+
+        cached = self._transcriber.is_model_cached()
+        msg = (
+            "Cargando modelo Whisper en RAM..."
+            if cached
+            else "Descargando modelo Whisper (~1.5 GB)..."
+        )
+        self._flash_status(msg, "#dcdcaa")
+
+        def _load() -> None:
+            try:
+                self._transcriber.preload()
+                self.after(0, self._flash_status, "Modelo listo", "#4ec9b0")
+                self.after(2_000, lambda: self._set_state(self._state))
+            except Exception as exc:
+                logger.error("Model preload failed: %s", exc)
+                self.after(0, self._flash_status, f"Error al cargar modelo: {exc}", "#f44747")
+
+        threading.Thread(target=_load, daemon=True).start()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
