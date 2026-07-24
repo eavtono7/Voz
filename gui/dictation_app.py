@@ -547,135 +547,6 @@ class App(tk.Tk):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# First-run wizard
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-def _run_first_run_wizard(parent: tk.Tk) -> None:
-    """Guided setup on first launch (config.json does not exist yet)."""
-    wizard = tk.Toplevel(parent)
-    wizard.title("Bienvenido a Voz")
-    wizard.geometry("560x520")
-    wizard.resizable(False, False)
-    wizard.configure(bg="#1e1e1e")
-    wizard.transient(parent)
-    wizard.grab_set()
-
-    wizard_width, wizard_height = 560, 520
-    x = (wizard.winfo_screenwidth() - wizard_width) // 2
-    y = (wizard.winfo_screenheight() - wizard_height) // 2
-    wizard.geometry(f"+{x}+{y}")
-
-    # ── Variables ────────────────────────────────────────────────────────
-    mic_var = tk.StringVar()
-    lang_var = tk.StringVar(value=config.LANGUAGE)
-
-    # ── UI ───────────────────────────────────────────────────────────────
-
-    tk.Label(
-        wizard,
-        text="🎙️  Bienvenido a Voz",
-        font=("Segoe UI", 18, "bold"),
-        bg="#1e1e1e", fg="#4ec9b0",
-    ).pack(pady=(30, 5))
-
-    tk.Label(
-        wizard,
-        text="Dictado por voz con inteligencia artificial local",
-        font=("Segoe UI", 10),
-        bg="#1e1e1e", fg="#808080",
-    ).pack(pady=(0, 25))
-
-    frame = tk.Frame(wizard, bg="#1e1e1e")
-    frame.pack(pady=5, padx=30, fill="x")
-
-    # Mic
-    tk.Label(
-        frame, text="Selecciona tu micrófono:",
-        bg="#1e1e1e", fg="#e0e0e0", font=("Segoe UI", 10), anchor="w",
-    ).pack(fill="x")
-
-    try:
-        import sounddevice as sd
-        devices = sd.query_devices()
-        hostapis = sd.query_hostapis()
-        mic_list = []
-        for i, d in enumerate(devices):
-            if d["max_input_channels"] == 0:
-                continue
-            hostapi_name = hostapis[d["hostapi"]]["name"]
-            if hostapi_name != "Windows WASAPI":
-                continue
-            name_lower = d["name"].lower()
-            if any(x in name_lower for x in ["mix", "loopback", "monitor", "stereo mix"]):
-                continue
-            mic_list.append(f"{i}: {d['name']}")
-    except Exception:
-        mic_list = []
-
-    import tkinter.ttk as ttk
-    mic_combo = ttk.Combobox(
-        frame, textvariable=mic_var,
-        values=mic_list or ["Micrófono predeterminado"],
-        width=52, state="readonly",
-    )
-    mic_combo.pack(pady=(3, 15))
-
-    if mic_list:
-        prefer = next((x for x in mic_list if "MME" not in x), mic_list[0])
-        mic_combo.set(prefer)
-
-    # Language
-    tk.Label(
-        frame, text="Idioma principal:",
-        bg="#1e1e1e", fg="#e0e0e0", font=("Segoe UI", 10), anchor="w",
-    ).pack(fill="x")
-
-    ttk.Combobox(
-        frame, textvariable=lang_var,
-        values=["es", "en", "fr", "de", "pt", "it", "auto"],
-        width=10, state="readonly",
-    ).pack(pady=(3, 20), anchor="w")
-
-    # Info
-    tk.Label(
-        wizard,
-        text="El modelo Whisper se descargará automáticamente\n"
-             "la primera vez que transcribas (~1.5 GB).\n"
-             "Asegúrate de tener conexión a internet.",
-        bg="#1e1e1e", fg="#808080",
-        font=("Segoe UI", 9), justify="center",
-    ).pack(pady=5)
-
-    # ── Start button ──────────────────────────────────────────────────────
-    def on_start() -> None:
-        val = mic_var.get()
-        if val and ":" in val:
-            try:
-                config.MICROPHONE_DEVICE = int(val.split(":", maxsplit=1)[0])
-            except ValueError:
-                pass
-        config.LANGUAGE = lang_var.get()
-        if not config.save():
-            from tkinter import messagebox
-            messagebox.showerror("Error", "No se pudo guardar la configuración.")
-            return
-        wizard.destroy()
-
-    tk.Button(
-        wizard,
-        text="🎙️  ¡Comenzar!",
-        command=on_start,
-        bg="#4ec9b0", fg="#1e1e1e",
-        font=("Segoe UI", 12, "bold"),
-        relief="flat", padx=30, pady=8, cursor="hand2",
-        activebackground="#3da890",
-    ).pack(pady=(15, 0))
-
-    parent.wait_window(wizard)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # Entry point
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -683,21 +554,22 @@ def _run_first_run_wizard(parent: tk.Tk) -> None:
 def main() -> None:
     """Launch the GUI application.
 
-    Shows the setup wizard only on first launch.
+    On first launch (no config.json), opens the Settings window
+    automatically so the user can configure mic and language.
     """
     logger.info("Starting GUI main()")
+    app = App()
 
     if not config.CONFIG_PATH.exists():
-        logger.info("First launch detected – showing setup wizard")
-        app = App()
-        app.withdraw()
-        _run_first_run_wizard(app)
-        config.init()
-        app._on_settings_saved()
-    else:
-        logger.info("Config found – launching directly")
-        app = App()
+        logger.info("First launch – opening Settings automatically")
+        app.after(150, lambda: SettingsWindow(
+            app, on_save=lambda: _on_first_config(app),
+        ))
 
-    logger.info("App created, starting mainloop")
-    app.deiconify()
     app.run()
+
+
+def _on_first_config(app: App) -> None:
+    """Reload config and apply saved values after first-run setup."""
+    config.init()
+    app._on_settings_saved()
