@@ -81,6 +81,9 @@ class HotkeyListener:
             logger.info("Hotkey listener stopped")
 
     def restart(self, hotkey: str) -> None:
-        """Stop and restart with a different hotkey."""
+        """Stop and restart with a different hotkey. No-op if key unchanged."""
+        hotkey = hotkey.upper()
+        if hotkey == self._key_name:
+            return
         self.stop()
         self.start(hotkey)

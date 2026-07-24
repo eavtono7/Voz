@@ -16,6 +16,16 @@ from core import config
 
 logger = logging.getLogger(__name__)
 
+LANG_LABELS = {
+    "es": "Español",
+    "en": "English",
+    "fr": "Français",
+    "de": "Deutsch",
+    "pt": "Português",
+    "it": "Italiano",
+    "auto": "Auto-detectar",
+}
+
 
 class SettingsWindow(tk.Toplevel):
     """Modal settings dialog."""
@@ -28,219 +38,303 @@ class SettingsWindow(tk.Toplevel):
         super().__init__(parent)
         self._on_save = on_save
 
-        self.title("Configuración – Voz")
-        self.geometry("500x440")
+        self.title("Configuración")
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()
 
-        # Theme
         self._bg = "#1e1e1e"
         self._fg = "#e0e0e0"
         self._entry_bg = "#2d2d2d"
         self._accent = "#4ec9b0"
+        self._dim = "#808080"
+        self._sep = "#3a3a3a"
         self.configure(bg=self._bg)
+
+        self._mic_devices: list[tuple[int, str]] = []  # [(index, name), ...]
+        self._mic_var = tk.StringVar()
+        self._lang_var = tk.StringVar()
+        self._model_var = tk.StringVar()
+        self._hotkey_var = tk.StringVar()
+        self._auto_copy_var = tk.BooleanVar()
+        self._auto_save_var = tk.BooleanVar()
 
         self._build_ui()
         self._load_values()
-        self.protocol("WM_DELETE_WINDOW", self._cancel)
 
-        # Centre on parent
         self.update_idletasks()
-        x = parent.winfo_x() + (parent.winfo_width() - self.winfo_width()) // 2
-        y = parent.winfo_y() + (parent.winfo_height() - self.winfo_height()) // 2
-        self.geometry(f"+{x}+{y}")
+        w = self.winfo_reqwidth()
+        h = self.winfo_reqheight()
+        x = parent.winfo_x() + (parent.winfo_width() - w) // 2
+        y = parent.winfo_y() + (parent.winfo_height() - h) // 2
+        self.geometry(f"{w}x{h}+{x}+{y}")
 
-    # ── UI construction ───────────────────────────────────────────────────
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.bind("<Escape>", lambda _: self._cancel())
+        self.bind("<Return>", lambda _: self._save())
+
+    # ── UI ─────────────────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
-        """Create all form controls."""
         s = ttk.Style()
         s.theme_use("clam")
         s.configure("TLabel", background=self._bg, foreground=self._fg)
         s.configure("TFrame", background=self._bg)
-        s.configure(
-            "TButton",
-            background=self._accent, foreground="#1e1e1e",
-            borderwidth=0, focuscolor="none",
-        )
-        s.map("TButton", background=[("active", "#3da890")])
 
-        main = tk.Frame(self, bg=self._bg, padx=20, pady=20)
-        main.pack(fill="both", expand=True)
-
-        row = 0
+        main = tk.Frame(self, bg=self._bg)
+        main.pack(fill="both", expand=True, padx=24, pady=(24, 16))
 
         # Title
         tk.Label(
-            main, text="⚙️  Configuración",
-            font=("Segoe UI", 14, "bold"),
-            bg=self._bg, fg=self._accent,
-        ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 15))
-        row += 1
+            main,
+            text="Configuración",
+            font=("Segoe UI", 16, "bold"),
+            bg=self._bg,
+            fg=self._accent,
+            anchor="w",
+        ).pack(fill="x", pady=(0, 16))
 
-        # ── Micrófono ─────────────────────────────────────────────────
-        self._lbl_mic = tk.Label(
-            main, text="Micrófono:", bg=self._bg, fg=self._fg, anchor="w",
-        )
-        self._lbl_mic.grid(row=row, column=0, sticky="w", pady=5)
+        # ── Audio section ──────────────────────────────────────────────
+        self._section_header(main, "Audio")
+        self._section_hint(main, "Selecciona el micrófono que usarás para dictar.")
 
-        self._mic_var = tk.StringVar()
+        mic_frame = tk.Frame(main, bg=self._bg)
+        mic_frame.pack(fill="x", pady=(6, 16))
+
         self._mic_combo = ttk.Combobox(
-            main, textvariable=self._mic_var,
-            width=42, state="readonly",
+            mic_frame,
+            textvariable=self._mic_var,
+            state="readonly",
+            font=("Segoe UI", 10),
         )
-        self._mic_combo.grid(row=row, column=1, columnspan=2, sticky="ew", pady=5, padx=(10, 0))
+        self._mic_combo.pack(fill="x")
         self._populate_mics()
-        row += 1
 
-        # ── Idioma ────────────────────────────────────────────────────
+        # ── Transcripción section ──────────────────────────────────────
+        self._section_header(main, "Transcripción")
+        self._section_hint(
+            main,
+            'Modelos más grandes = mejor precisión pero más lentos.\n'
+            '"turbo" es el equilibrio recomendado.',
+        )
+
+        row = tk.Frame(main, bg=self._bg)
+        row.pack(fill="x", pady=(6, 4))
+
         tk.Label(
-            main, text="Idioma:", bg=self._bg, fg=self._fg, anchor="w",
-        ).grid(row=row, column=0, sticky="w", pady=5)
+            row, text="Idioma", bg=self._bg, fg=self._fg,
+            font=("Segoe UI", 10),
+        ).pack(side="left")
 
-        self._lang_var = tk.StringVar()
         ttk.Combobox(
-            main, textvariable=self._lang_var,
-            values=["es", "en", "fr", "de", "pt", "it", "auto"],
-            width=10, state="readonly",
-        ).grid(row=row, column=1, sticky="w", pady=5, padx=(10, 0))
-        row += 1
+            row,
+            textvariable=self._lang_var,
+            values=list(LANG_LABELS.keys()),
+            width=14,
+            state="readonly",
+            font=("Segoe UI", 10),
+        ).pack(side="right")
 
-        # ── Modelo ────────────────────────────────────────────────────
+        row2 = tk.Frame(main, bg=self._bg)
+        row2.pack(fill="x", pady=(4, 16))
+
         tk.Label(
-            main, text="Modelo:", bg=self._bg, fg=self._fg, anchor="w",
-        ).grid(row=row, column=0, sticky="w", pady=5)
+            row2, text="Modelo", bg=self._bg, fg=self._fg,
+            font=("Segoe UI", 10),
+        ).pack(side="left")
 
-        self._model_var = tk.StringVar()
         ttk.Combobox(
-            main, textvariable=self._model_var,
+            row2,
+            textvariable=self._model_var,
             values=["turbo", "large-v3", "medium", "small", "base", "tiny"],
-            width=15, state="readonly",
-        ).grid(row=row, column=1, sticky="w", pady=5, padx=(10, 0))
-        row += 1
+            width=14,
+            state="readonly",
+            font=("Segoe UI", 10),
+        ).pack(side="right")
 
-        # ── Tecla rápida ──────────────────────────────────────────────
-        tk.Label(
-            main, text="Tecla rápida:", bg=self._bg, fg=self._fg, anchor="w",
-        ).grid(row=row, column=0, sticky="w", pady=5)
+        # ── Hotkey section ─────────────────────────────────────────────
+        self._section_header(main, "Atajo de teclado")
+        self._section_hint(main, "Tecla global para iniciar/detener grabación.")
 
-        self._hotkey_var = tk.StringVar()
-        tk.Entry(
-            main, textvariable=self._hotkey_var,
-            width=10, bg=self._entry_bg, fg=self._fg,
+        hk_frame = tk.Frame(main, bg=self._bg)
+        hk_frame.pack(fill="x", pady=(6, 16))
+
+        self._hotkey_entry = tk.Entry(
+            hk_frame,
+            textvariable=self._hotkey_var,
+            width=10,
+            bg=self._entry_bg,
+            fg=self._fg,
             insertbackground=self._fg,
-            relief="flat", font=("Segoe UI", 10, "bold"), justify="center",
-        ).grid(row=row, column=1, sticky="w", pady=5, padx=(10, 0))
-        row += 1
+            relief="flat",
+            font=("Segoe UI", 12, "bold"),
+            justify="center",
+        )
+        self._hotkey_entry.pack()
 
-        # ── Checkboxes ────────────────────────────────────────────────
+        # ── Automation section ─────────────────────────────────────────
+        self._section_header(main, "Automatización")
+
         opt = tk.Frame(main, bg=self._bg)
-        opt.grid(row=row, column=0, columnspan=3, sticky="w", pady=(10, 5))
-        row += 1
+        opt.pack(fill="x", pady=(6, 10))
 
-        self._auto_copy_var = tk.BooleanVar()
         tk.Checkbutton(
-            opt, text="Copiar al portapapeles automáticamente",
+            opt,
+            text="Copiar al portapapeles al terminar",
             variable=self._auto_copy_var,
-            bg=self._bg, fg=self._fg, selectcolor=self._entry_bg,
-            activebackground=self._bg, activeforeground=self._fg,
+            bg=self._bg,
+            fg=self._fg,
+            selectcolor=self._entry_bg,
+            activebackground=self._bg,
+            activeforeground=self._fg,
+            font=("Segoe UI", 10),
         ).pack(anchor="w")
 
-        self._auto_save_var = tk.BooleanVar()
         tk.Checkbutton(
-            opt, text="Guardar transcripción automáticamente",
+            opt,
+            text="Guardar transcripción en archivo",
             variable=self._auto_save_var,
-            bg=self._bg, fg=self._fg, selectcolor=self._entry_bg,
-            activebackground=self._bg, activeforeground=self._fg,
+            bg=self._bg,
+            fg=self._fg,
+            selectcolor=self._entry_bg,
+            activebackground=self._bg,
+            activeforeground=self._fg,
+            font=("Segoe UI", 10),
         ).pack(anchor="w")
 
-        # ── Buttons ───────────────────────────────────────────────────
+        # ── Buttons ────────────────────────────────────────────────────
         btn_frame = tk.Frame(main, bg=self._bg)
-        btn_frame.grid(row=row, column=0, columnspan=3, pady=(15, 0))
-        row += 1
+        btn_frame.pack(fill="x", pady=(8, 0))
 
-        for txt, cmd in [("Cancelar", self._cancel), ("Guardar", self._save)]:
-            tk.Button(
-                btn_frame, text=txt, command=cmd,
-                bg="#3a3a3a", fg=self._fg,
-                relief="flat", padx=20, pady=5, cursor="hand2",
-                activebackground="#4a4a4a", activeforeground="#ffffff",
-            ).pack(side="left", padx=5)
+        tk.Button(
+            btn_frame,
+            text="Cancelar",
+            command=self._cancel,
+            bg="#3a3a3a",
+            fg=self._fg,
+            relief="flat",
+            padx=16,
+            pady=6,
+            cursor="hand2",
+            font=("Segoe UI", 10),
+            activebackground="#4a4a4a",
+            activeforeground="#ffffff",
+        ).pack(side="left")
 
-    # ── Helpers ───────────────────────────────────────────────────────────
+        tk.Button(
+            btn_frame,
+            text="Guardar cambios",
+            command=self._save,
+            bg=self._accent,
+            fg="#1e1e1e",
+            relief="flat",
+            padx=24,
+            pady=6,
+            cursor="hand2",
+            font=("Segoe UI", 10, "bold"),
+            activebackground="#3da890",
+        ).pack(side="right")
+
+    def _section_header(self, parent: tk.Frame, text: str) -> None:
+        sep = tk.Frame(parent, bg=self._sep, height=1)
+        sep.pack(fill="x", pady=(8, 6))
+
+        tk.Label(
+            parent,
+            text=text,
+            bg=self._bg,
+            fg=self._accent,
+            font=("Segoe UI", 10, "bold"),
+            anchor="w",
+        ).pack(fill="x")
+
+    def _section_hint(self, parent: tk.Frame, text: str) -> None:
+        tk.Label(
+            parent,
+            text=text,
+            bg=self._bg,
+            fg=self._dim,
+            font=("Segoe UI", 8),
+            anchor="w",
+            justify="left",
+        ).pack(fill="x")
+
+    # ── Mic population ─────────────────────────────────────────────────────
 
     def _populate_mics(self) -> None:
-        """Detect input devices and populate the dropdown."""
         try:
             import sounddevice as sd
 
             devices = sd.query_devices()
-            items = [
-                f"{i}: {d['name']}"
-                for i, d in enumerate(devices)
-                if d["max_input_channels"] > 0
-            ]
-            self._mic_combo["values"] = items
+            self._mic_devices.clear()
+            names: list[str] = []
 
-            if not items:
+            for i, d in enumerate(devices):
+                if d["max_input_channels"] <= 0:
+                    continue
+                self._mic_devices.append((i, d["name"]))
+                names.append(d["name"])
+
+            self._mic_combo["values"] = names
+
+            if not names:
                 return
 
-            # Select current device
             cur = config.MICROPHONE_DEVICE
             if cur is not None:
-                match = [x for x in items if x.startswith(f"{cur}:")]
-                if match:
-                    self._mic_combo.set(match[0])
-                    return
+                for idx, name in self._mic_devices:
+                    if idx == cur:
+                        self._mic_combo.set(name)
+                        return
 
-            # Prefer non-MME device
-            for x in items:
-                if "MME" not in x:
-                    self._mic_combo.set(x)
-                    return
-            self._mic_combo.set(items[0])
+            self._mic_combo.set(names[0])
         except Exception as exc:
             logger.warning("Could not enumerate microphones: %s", exc)
 
+    # ── Load / Save ────────────────────────────────────────────────────────
+
     def _load_values(self) -> None:
-        """Copy current config values into the form."""
         self._lang_var.set(config.LANGUAGE or "es")
         self._model_var.set(config.MODEL)
         self._hotkey_var.set(config.HOTKEY)
         self._auto_copy_var.set(config.AUTO_COPY)
         self._auto_save_var.set(config.AUTO_SAVE)
 
-    def _device_from_combo(self) -> Optional[int]:
-        """Parse device index from the combo-box selection."""
-        val = self._mic_var.get()
-        if val and ":" in val:
-            try:
-                return int(val.split(":", maxsplit=1)[0])
-            except ValueError:
-                return None
+    def _selected_mic_index(self) -> Optional[int]:
+        name = self._mic_var.get()
+        for idx, dev_name in self._mic_devices:
+            if dev_name == name:
+                return idx
         return config.MICROPHONE_DEVICE
 
-    # ── Actions ───────────────────────────────────────────────────────────
-
     def _save(self) -> None:
-        """Validate and persist configuration."""
         hotkey = self._hotkey_var.get().strip().upper()
         if not hotkey:
             from tkinter import messagebox
-            messagebox.showerror("Error", "La tecla rápida no puede estar vacía")
+
+            messagebox.showerror(
+                "Error", "La tecla rápida no puede estar vacía.", parent=self
+            )
+            self._hotkey_entry.focus_set()
             return
 
-        config.MICROPHONE_DEVICE = self._device_from_combo()
+        config.MICROPHONE_DEVICE = self._selected_mic_index()
         config.LANGUAGE = self._lang_var.get()
         config.MODEL = self._model_var.get()
         config.HOTKEY = hotkey
         config.AUTO_COPY = self._auto_copy_var.get()
         config.AUTO_SAVE = self._auto_save_var.get()
+
         if not config.save():
             from tkinter import messagebox
-            messagebox.showerror("Error", "No se pudo guardar la configuración.")
+
+            messagebox.showerror(
+                "Error", "No se pudo guardar la configuración.", parent=self
+            )
             return
+
+        logger.info("Settings saved — hotkey=%s mic=%s lang=%s model=%s",
+                     hotkey, config.MICROPHONE_DEVICE, config.LANGUAGE, config.MODEL)
 
         if self._on_save:
             self._on_save()
