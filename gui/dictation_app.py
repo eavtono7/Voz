@@ -17,6 +17,7 @@ States
 
 from __future__ import annotations
 
+import ctypes
 import logging
 import itertools
 import threading
@@ -297,7 +298,7 @@ class App(tk.Tk):
             text=text,
             fg=self.STATUS_COLOR.get(state, "#e0e0e0"),
         )
-        self.update()
+        self._force_paint()
 
     # ── Transitions ───────────────────────────────────────────────────────
 
@@ -432,7 +433,7 @@ class App(tk.Tk):
         ts = datetime.now().strftime("%H:%M:%S")
         self._text.insert("end", f"\n[{ts}] {msg}\n", "timestamp")
         self._text.see("end")
-        self.update()
+        self._force_paint()
 
     # ── Text area helpers ───────────────────────────────────────────────
 
@@ -509,9 +510,18 @@ class App(tk.Tk):
         self._status_lbl.configure(text=msg, fg=color)
         self._log_status(msg)
 
+    def _force_paint(self) -> None:
+        """Force immediate window repaint via Win32 API (works without focus)."""
+        self.update_idletasks()
+        try:
+            ctypes.windll.user32.UpdateWindow(self.winfo_id())
+        except Exception:
+            pass
+
     def _flash(self, msg: str) -> None:
         """Show a temporary message in the status bar (2.5 s)."""
         self._status_lbl.configure(text=msg, fg="#4ec9b0")
+        self._force_paint()
         self.after(2_500, lambda: self._set_state(self._state))
 
     def _on_close(self) -> None:
@@ -595,7 +605,7 @@ class App(tk.Tk):
             self._progress_id = self.after(80, _animate, step + 1)
 
         _animate(0)
-        self.update()
+        self._force_paint()
 
     def _hide_progress(self) -> None:
         """Remove the progress bar."""
