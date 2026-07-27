@@ -261,19 +261,32 @@ class SettingsWindow(tk.Toplevel):
 
     # ── Mic population ─────────────────────────────────────────────────────
 
+    _NON_MIC_KEYWORDS = [
+        "stereo mix", "loopback", "monitor", "wave out",
+        "salida", "output", "altavoz", "speaker",
+    ]
+
     def _populate_mics(self) -> None:
         try:
             import sounddevice as sd
 
             devices = sd.query_devices()
             self._mic_devices.clear()
-            names: list[str] = []
+            seen: set[str] = set()
 
             for i, d in enumerate(devices):
                 if d["max_input_channels"] <= 0:
                     continue
-                self._mic_devices.append((i, d["name"]))
-                names.append(d["name"])
+                name = d["name"]
+                name_lower = name.lower()
+                if any(kw in name_lower for kw in self._NON_MIC_KEYWORDS):
+                    continue
+                if name in seen:
+                    continue
+                seen.add(name)
+                self._mic_devices.append((i, name))
+
+            names = [n for _, n in self._mic_devices]
 
             self._mic_combo["values"] = names
 

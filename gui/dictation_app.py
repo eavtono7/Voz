@@ -18,6 +18,7 @@ States
 from __future__ import annotations
 
 import logging
+import itertools
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -114,19 +115,42 @@ class App(tk.Tk):
         main.pack(fill="both", expand=True, padx=12, pady=12)
 
         # ── Header banner ────────────────────────────────────────────────
-        banner = tk.Label(
-            main,
+        banner_frame = tk.Frame(main, bg="#1e1e1e")
+        banner_frame.pack(fill="x", pady=(0, 2))
+
+        tk.Label(
+            banner_frame,
             text=(
                 "\u25A0  V O Z    D i c t a d o   p o r   v o z"
             ),
             bg="#1e1e1e",
             fg="#4ec9b0",
-            font=("Consolas", 10, "bold"),
-        )
-        banner.pack(pady=(0, 6))
+            font=("Consolas", 14, "bold"),
+        ).pack()
 
         sep = tk.Frame(main, bg="#3a3a3a", height=1)
-        sep.pack(fill="x", pady=(0, 8))
+        sep.pack(fill="x")
+
+        # ── Progress bar (hidden by default) ───────────────────────────
+        self._progress_frame = tk.Frame(main, bg="#1e1e1e")
+        self._progress_lbl = tk.Label(
+            self._progress_frame,
+            text="",
+            bg="#1e1e1e",
+            fg="#dcdcaa",
+            font=("Segoe UI", 9),
+        )
+        self._progress_bar = tk.Frame(
+            self._progress_frame,
+            bg="#2d2d2d",
+            height=3,
+        )
+        self._progress_fill = tk.Frame(
+            self._progress_bar,
+            bg="#4ec9b0",
+            width=0,
+        )
+        self._progress_fill.place(relheight=1, relwidth=0)
 
         # ── Text area ────────────────────────────────────────────────────
         txt_container = tk.Frame(main, bg="#2d2d2d")
@@ -273,7 +297,7 @@ class App(tk.Tk):
             text=text,
             fg=self.STATUS_COLOR.get(state, "#e0e0e0"),
         )
-        self.update_idletasks()  # Force UI update
+        self.update()
 
     # ── Transitions ───────────────────────────────────────────────────────
 
@@ -408,7 +432,7 @@ class App(tk.Tk):
         ts = datetime.now().strftime("%H:%M:%S")
         self._text.insert("end", f"\n[{ts}] {msg}\n", "timestamp")
         self._text.see("end")
-        self.update_idletasks()
+        self.update()
 
     # ── Text area helpers ───────────────────────────────────────────────
 
@@ -530,17 +554,56 @@ class App(tk.Tk):
             logger.info("Application shut down")
 
     def _preload_model(self) -> None:
-        """Start background model loading so the first dictation is fast."""
+        """Start background model loading with progress feedback."""
         if self._transcriber.is_model_loaded:
             return
+
+        cached = self._transcriber.is_model_cached()
+        if cached:
+            self._show_progress("Cargando modelo en RAM...")
+        else:
+            self._show_progress("Descargando modelo (~1.5 GB)...")
 
         def _load() -> None:
             try:
                 self._transcriber.preload()
+                self.after(0, self._hide_progress)
+                self.after(0, self._flash_status, "Modelo listo", "#4ec9b0")
+                self.after(2_000, lambda: self._set_state(self._state))
             except Exception as exc:
-                logger.warning("Model preload failed (will retry on first dictation): %s", exc)
+                logger.warning("Model preload failed (will retry on dictation): %s", exc)
+                self.after(0, self._hide_progress)
 
         threading.Thread(target=_load, daemon=True).start()
+
+    def _show_progress(self, msg: str) -> None:
+        """Display an indeterminate progress bar with a label."""
+        self._progress_lbl.configure(text=msg)
+        self._progress_fill.place(relwidth=0)
+        self._progress_frame.pack(
+            fill="x", pady=(2, 4), before=self._text.master
+        )
+        self._progress_bar.pack(fill="x", pady=(2, 0))
+
+        self._anim_running = True
+
+        def _animate(step: int = 0) -> None:
+            if not getattr(self, "_anim_running", False):
+                return
+            w = (step % 100) / 100.0
+            self._progress_fill.place(relwidth=0.15 + w * 0.4)
+            self._progress_id = self.after(80, _animate, step + 1)
+
+        _animate(0)
+        self.update()
+
+    def _hide_progress(self) -> None:
+        """Remove the progress bar."""
+        self._anim_running = False
+        if hasattr(self, "_progress_id"):
+            self.after_cancel(self._progress_id)
+        self._progress_frame.pack_forget()
+        self._progress_bar.pack_forget()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
