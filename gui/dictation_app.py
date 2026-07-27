@@ -595,6 +595,8 @@ class App(tk.Tk):
         )
         self._progress_bar.pack(fill="x", pady=(2, 0))
 
+        self._log_status(msg)
+
         self._anim_running = True
 
         def _animate(step: int = 0) -> None:
