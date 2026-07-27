@@ -71,7 +71,7 @@ def init() -> None:
         BASE_DIR = Path(__file__).resolve().parent.parent
 
     # ── Resolve all paths ─────────────────────────────────────────────────
-    MODEL_DIR = BASE_DIR / "models" / "whisper"
+    MODEL_DIR = Path.home() / ".voz" / "models"
     OUTPUT_DIR = BASE_DIR / "data" / "output"
     DICTATIONS_DIR = BASE_DIR / "data" / "dictations"
     CONFIG_PATH = BASE_DIR / "config.json"
