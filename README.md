@@ -72,7 +72,8 @@ voz/
 ├── data/
 │   ├── dictations/          ← Transcripciones guardadas (.json + .txt)
 │   └── voz.log              ← Log de actividad
-└── ~/.voz/models/           ← Modelo Whisper cacheado (compartido)  
+└── models/
+    └── whisper/             ← Modelo Whisper cacheado
 ```
 
 ### Principios arquitectónicos
@@ -101,11 +102,11 @@ voz/
 
 ## 📐 Decisiones técnicas
 
-### ¿Por qué `--onedir` y no `--onefile`?` con el modelo fuera del `.exe`
+### ¿Por qué `--onedir` y no `--onefile`?
 
 El modelo Whisper pesa ~1.5 GB. PyInstaller no puede empaquetar eso dentro de un solo `.exe`
-de forma práctica. El modelo se descarga automáticamente a `~/.voz/models/` (compartido
-entre `voz.exe` y `main.py` para que no se duplique).
+de forma práctica. El modelo se guarda en `models/whisper/` junto al ejecutable
+para que toda la app viva en una sola carpeta autocontenida.
 
 ### ¿Por qué Turbo y no Small/Base?
 Whisper **turbo** ofrece la mejor relación calidad/velocidad. En una Beelink Ryzen 7 7840HS, transcribe 60 segundos de audio en ~14 segundos (tras la carga inicial). Consume ~1.2 GB de RAM.
