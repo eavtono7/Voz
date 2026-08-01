@@ -6,7 +6,7 @@ regardless of whether the application window is focused.
 
 Uses ``on_release`` (not ``on_press``) to avoid key-repeat
 triggering multiple events when the user holds the key.
-A simple debounce prevents duplicate events within 300 ms.
+A simple debounce prevents duplicate events within 500 ms.
 """
 
 from __future__ import annotations

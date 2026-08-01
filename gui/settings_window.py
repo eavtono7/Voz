@@ -25,6 +25,7 @@ LANG_LABELS = {
     "it": "Italiano",
     "auto": "Auto-detectar",
 }
+LANG_CODES = {v: k for k, v in LANG_LABELS.items()}
 
 
 class SettingsWindow(tk.Toplevel):
@@ -129,7 +130,7 @@ class SettingsWindow(tk.Toplevel):
         ttk.Combobox(
             row,
             textvariable=self._lang_var,
-            values=list(LANG_LABELS.keys()),
+            values=list(LANG_LABELS.values()),
             width=14,
             state="readonly",
             font=("Segoe UI", 10),
@@ -307,7 +308,7 @@ class SettingsWindow(tk.Toplevel):
     # ── Load / Save ────────────────────────────────────────────────────────
 
     def _load_values(self) -> None:
-        self._lang_var.set(config.LANGUAGE or "es")
+        self._lang_var.set(LANG_LABELS.get(config.LANGUAGE, LANG_LABELS["es"]))
         self._model_var.set(config.MODEL)
         self._hotkey_var.set(config.HOTKEY)
         self._auto_copy_var.set(config.AUTO_COPY)
@@ -332,7 +333,7 @@ class SettingsWindow(tk.Toplevel):
             return
 
         config.MICROPHONE_DEVICE = self._selected_mic_index()
-        config.LANGUAGE = self._lang_var.get()
+        config.LANGUAGE = LANG_CODES.get(self._lang_var.get(), "es")
         config.MODEL = self._model_var.get()
         config.HOTKEY = hotkey
         config.AUTO_COPY = self._auto_copy_var.get()

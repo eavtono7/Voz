@@ -107,6 +107,11 @@ class Transcriber:
         """
         self._load_model()
 
+    def unload(self) -> None:
+        """Free the loaded model from memory (~1.2 GB RAM reclaimed by GC)."""
+        with self._model_lock:
+            self._model = None
+
     def is_model_cached(self) -> bool:
         """Check if the model files are already downloaded on disk.
 
@@ -114,19 +119,6 @@ class Transcriber:
         or direct-download model files under MODEL_DIR.
         """
         model_dir = config.MODEL_DIR
-
-        hub_root = model_dir / "models--mobiuslabsgmbh--faster-whisper-large-v3-turbo"
-        snapshots = hub_root / "snapshots"
-        if snapshots.exists():
-            for snap_dir in snapshots.iterdir():
-                if snap_dir.is_dir() and (snap_dir / "model.bin").exists():
-                    return True
-
-        snapshots_turbo = model_dir / "models--Systran--faster-whisper-large-v3" / "snapshots"
-        if snapshots_turbo.exists():
-            for snap_dir in snapshots_turbo.iterdir():
-                if snap_dir.is_dir() and (snap_dir / "model.bin").exists():
-                    return True
 
         for candidate in model_dir.glob("models--*"):
             if candidate.is_dir():

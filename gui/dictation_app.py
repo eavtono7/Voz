@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import ctypes
 import logging
-import itertools
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -362,6 +361,14 @@ class App(tk.Tk):
         """Run faster-whisper in a background thread."""
         logger.info("_worker_transcribe started, audio samples: %d", len(audio))
         try:
+            if not self._transcriber.is_model_loaded:
+                msg = (
+                    "Esperando descarga del modelo..."
+                    if not self._transcriber.is_model_cached()
+                    else "Cargando modelo en RAM..."
+                )
+                self.after(0, self._flash_status, msg, "#dcdcaa")
+
             logger.debug("Calling transcriber.transcribe()")
             result = self._transcriber.transcribe(audio)
             logger.info("Transcription completed, text length: %d", len(result.text))
@@ -401,7 +408,7 @@ class App(tk.Tk):
         if config.AUTO_SAVE:
             logger.debug("Auto-save enabled, starting save thread")
             self._set_state("storing")
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
             threading.Thread(
                 target=self._worker_save,
                 args=(result, f"dictado_{timestamp}"),
@@ -494,8 +501,10 @@ class App(tk.Tk):
 
     def _on_settings_saved(self) -> None:
         """Recreate modules that depend on changed config values."""
-        self._recorder = Recorder(device=config.MICROPHONE_DEVICE)
+        if self._recorder.device != config.MICROPHONE_DEVICE:
+            self._recorder = Recorder(device=config.MICROPHONE_DEVICE)
         if self._transcriber.model_name != config.MODEL:
+            self._transcriber.unload()
             self._transcriber = Transcriber()
         self._storage = Storage(config.DICTATIONS_DIR)
         try:
