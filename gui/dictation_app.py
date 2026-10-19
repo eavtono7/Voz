@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import queue
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -81,13 +82,26 @@ class App(tk.Tk):
         # ── Threading ────────────────────────────────────────────────────
         self._transcription_thread: threading.Thread | None = None
 
+        # ── Thread-safe event plumbing ───────────────────────────────────
+        # pynput's listener thread must never call tkinter directly. It only
+        # posts to this queue; a poller on the Tk thread consumes it.
+        self._events: queue.Queue[str] = queue.Queue()
+        self._running: bool = True
+
+        # ── Transcript store (only real dictation text, no status logs) ──
+        self._transcripts: list[str] = []
+
+        # ── Timers / deferred work ───────────────────────────────────────
+        self._return_to_idle_id: str | None = None
+        self._pending_settings: bool = False
+
         # ── Build UI ─────────────────────────────────────────────────────
         logger.debug("Building UI...")
         self._build_ui()
         logger.debug("Applying theme...")
         self._apply_theme()
-        logger.debug("Setting up events...")
-        self._setup_events()
+        logger.debug("Setting up event poller...")
+        self._start_event_poller()
         self.update()  # Force initial render
         logger.debug("UI built successfully")
 
@@ -249,14 +263,31 @@ class App(tk.Tk):
                 "Prueba ejecutando como Administrador o elige otra tecla en Configuración.",
             )
 
-    def _setup_events(self) -> None:
-        """Bind custom virtual events (thread-safe communication)."""
-        self.bind("<<HotkeyPressed>>", lambda _: self._handle_hotkey())
+    # ── Thread-safe event plumbing ────────────────────────────────────────
+
+    _EVENT_HOTKEY = "hotkey"
+
+    def _start_event_poller(self) -> None:
+        """Drain cross-thread events on the Tk thread (every 50 ms)."""
+        self.after(50, self._poll_events)
+
+    def _poll_events(self) -> None:
+        if not self._running:
+            return
+        try:
+            while True:
+                event = self._events.get_nowait()
+                if event == self._EVENT_HOTKEY:
+                    self._handle_hotkey()
+                else:
+                    logger.warning("Unknown event in queue: %r", event)
+        except queue.Empty:
+            pass
+        self.after(50, self._poll_events)
 
     def _on_hotkey(self) -> None:
-        """Called by pynput on a background thread – schedule via thread-safe event."""
-        logger.debug("_on_hotkey called, generating event")
-        self.event_generate("<<HotkeyPressed>>")
+        """Called by pynput on a background thread – post to queue (thread-safe)."""
+        self._events.put(self._EVENT_HOTKEY)
 
     def _handle_hotkey(self) -> None:
         """React to hotkey based on current state."""
@@ -265,6 +296,16 @@ class App(tk.Tk):
             self._start_recording()
         elif self._state == "recording":
             self._stop_and_transcribe()
+        elif self._state == "done":
+            # A press during the brief "done" window must not be lost:
+            # cancel the pending idle transition and record immediately.
+            if self._return_to_idle_id is not None:
+                try:
+                    self.after_cancel(self._return_to_idle_id)
+                except Exception:
+                    pass
+                self._return_to_idle_id = None
+            self._start_recording()
 
     # ═══════════════════════════════════════════════════════════════════════
     # State machine
@@ -320,73 +361,69 @@ class App(tk.Tk):
             self._log_status(f"❌  Error inesperado: {exc}")
 
     def _stop_and_transcribe(self) -> None:
-        """RECORDING → TRANSCRIBING (recording stops, transcription thread starts)"""
+        """RECORDING → TRANSCRIBING (stop + resample + transcribe off-thread).
+
+        recorder.stop() may take hundreds of ms on long dictations (buffer
+        concat + resample) — never run it on the UI thread.
+        """
         logger.info("_stop_and_transcribe called")
-        try:
-            logger.debug("Calling recorder.stop()")
-            audio = self._recorder.stop()
-            logger.info("Recorder stopped, audio length: %d samples", len(audio))
-        except RecorderError as exc:
-            logger.error("RecorderError in _stop_and_transcribe: %s", exc, exc_info=True)
-            self._set_state("error", str(exc))
-            self._log_status(f"❌  Error al detener: {exc}")
-            return
-        except Exception as exc:
-            logger.error("Unexpected error in recorder.stop(): %s", exc, exc_info=True)
-            self._set_state("error", str(exc))
-            self._log_status(f"❌  Error inesperado: {exc}")
-            return
-
-        if len(audio) == 0:
-            logger.warning("Audio is empty, returning to idle")
-            self._set_state("idle")
-            self._log_status("⚠️  No se capturó audio")
-            return
-
-        self._last_duration = len(audio) / config.SAMPLE_RATE
-        logger.info("Setting state to transcribing, duration: %.2fs", self._last_duration)
         self._set_state("transcribing")
-        self._log_status(f"🔄  Transcribiendo {self._last_duration:.1f}s de audio...")
+        self._log_status("🔄  Transcribiendo...")
 
-        logger.debug("Starting transcription thread")
+        logger.debug("Starting transcription worker thread")
         self._transcription_thread = threading.Thread(
             target=self._worker_transcribe,
-            args=(audio,),
             daemon=True,
         )
         self._transcription_thread.start()
         logger.info("Transcription thread started")
 
-    def _worker_transcribe(self, audio) -> None:
-        """Run faster-whisper in a background thread."""
-        logger.info("_worker_transcribe started, audio samples: %d", len(audio))
+    def _worker_transcribe(self) -> None:
+        """Stop the recorder and run faster-whisper — all on a background thread."""
         try:
-            if not self._transcriber.is_model_loaded:
-                msg = (
-                    "Esperando descarga del modelo..."
-                    if not self._transcriber.is_model_cached()
-                    else "Cargando modelo en RAM..."
-                )
-                self.after(0, self._flash_status, msg, "#dcdcaa")
+            audio = self._recorder.stop()
+        except RecorderError as exc:
+            logger.error("RecorderError in worker: %s", exc, exc_info=True)
+            self._safe_after(self._on_transcription_error, f"Error al detener la grabación: {exc}")
+            return
+        except Exception as exc:
+            logger.exception("Unexpected error stopping the recorder in worker")
+            self._safe_after(self._on_transcription_error, f"Error al detener la grabación: {exc}")
+            return
 
-            logger.debug("Calling transcriber.transcribe()")
+        if len(audio) == 0:
+            logger.warning("Audio is empty, returning to idle")
+            self._safe_after(self._on_empty_audio)
+            return
+
+        if not self._transcriber.is_model_loaded:
+            msg = (
+                "Esperando descarga del modelo..."
+                if not self._transcriber.is_model_cached()
+                else "Cargando modelo en RAM..."
+            )
+            self._safe_after(self._flash_status, msg, "#dcdcaa")
+
+        try:
+            logger.info("Worker transcribing %d samples", len(audio))
             result = self._transcriber.transcribe(audio)
             logger.info("Transcription completed, text length: %d", len(result.text))
-            self.after(0, self._on_transcription_done, result)
+            self._safe_after(self._on_transcription_done, result)
         except TranscriberError as exc:
             logger.exception("Transcription failed")
-            self.after(0, self._on_transcription_error, str(exc))
+            self._safe_after(self._on_transcription_error, str(exc))
         except Exception as exc:
             logger.exception("Unexpected error in _worker_transcribe")
-            self.after(0, self._on_transcription_error, str(exc))
+            self._safe_after(self._on_transcription_error, str(exc))
 
     def _worker_save(self, result, filename) -> None:
         """Save transcription result in a background thread."""
+        storage = self._storage  # capture: settings can swap it mid-save
         try:
-            self._storage.save(result, filename)
+            storage.save(result, filename)
         except Exception as exc:
             logger.error("Auto-save failed: %s", exc)
-            self.after(0, self._flash, f"⚠️  Auto-guardado falló: {exc}")
+            self._safe_after(self._flash, f"⚠️  Auto-guardado falló: {exc}")
 
     def _on_transcription_done(self, result) -> None:
         """TRANSCRIBING → COPYING → STORING → DONE"""
@@ -423,7 +460,7 @@ class App(tk.Tk):
         logger.info("Setting state to done, will return to idle in 2s")
         self._set_state("done", detail=dur)
         self._log_status(f"✅  Transcripción completada ({dur:.1f}s)")
-        self.after(2_000, self._return_to_idle)
+        self._return_to_idle_id = self.after(2_000, self._return_to_idle)
 
     def _on_transcription_error(self, msg: str) -> None:
         """TRANSCRIBING → ERROR"""
@@ -431,9 +468,21 @@ class App(tk.Tk):
         self._set_state("error", msg)
         self._log_status(f"❌  Error de transcripción: {msg}")
 
+    def _on_empty_audio(self) -> None:
+        """TRANSCRIBING → IDLE (worker produced no samples)."""
+        self._set_state("idle")
+        self._log_status("⚠️  No se capturó audio")
+        if self._pending_settings:
+            self._pending_settings = False
+            self._on_settings_saved()
+
     def _return_to_idle(self) -> None:
         """DONE → IDLE"""
+        self._return_to_idle_id = None
         self._set_state("idle")
+        if self._pending_settings:
+            self._pending_settings = False
+            self._on_settings_saved()
 
     def _log_status(self, msg: str) -> None:
         """Write a status message to the text area."""
@@ -451,16 +500,23 @@ class App(tk.Tk):
         self._text.insert("end", f"{result.text}\n", "text")
         self._text.see("end")
 
+        if result.text.strip():
+            self._transcripts.append(result.text)
+
         self._counter_lbl.configure(
             text=f"Dictados hoy: {self._session_count}  ·  Último: {result.duration:.1f}s",
         )
+
+    def _current_transcripts(self) -> str:
+        """Only real dictation text — never the [hh:mm:ss] status log."""
+        return "\n".join(t for t in self._transcripts if t.strip())
 
     # ═══════════════════════════════════════════════════════════════════════
     # Button actions
     # ═══════════════════════════════════════════════════════════════════════
 
     def _copy_text(self) -> None:
-        text = self._text.get("1.0", "end-1c").strip()
+        text = self._current_transcripts()
         if not text:
             return
         if self._clipboard.copy(text):
@@ -469,15 +525,16 @@ class App(tk.Tk):
             self._flash("❌  No se pudo copiar")
 
     def _clear_text(self) -> None:
-        if not self._text.get("1.0", "end-1c").strip():
+        if not self._current_transcripts() and not self._text.get("1.0", "end-1c").strip():
             return
         if messagebox.askyesno("Limpiar", "¿Borrar todo el texto acumulado?"):
             self._text.delete("1.0", "end")
+            self._transcripts.clear()
             self._counter_lbl.configure(text="")
             self._flash("🗑️  Texto borrado")
 
     def _save_as(self) -> None:
-        text = self._text.get("1.0", "end-1c").strip()
+        text = self._current_transcripts()
         if not text:
             messagebox.showinfo("Guardar", "No hay texto para guardar")
             return
@@ -500,7 +557,17 @@ class App(tk.Tk):
         SettingsWindow(self, on_save=self._on_settings_saved)
 
     def _on_settings_saved(self) -> None:
-        """Recreate modules that depend on changed config values."""
+        """Recreate modules that depend on changed config values.
+
+        Deferred while a dictation cycle is running: swapping Recorder or
+        Transcriber mid-cycle would orphan an open mic stream or an in-flight
+        model. The pending changes are applied when the cycle returns to idle.
+        """
+        if self._state in ("recording", "transcribing"):
+            self._pending_settings = True
+            self._log_status("⚙️  Cambios guardados — se aplicarán al terminar el dictado")
+            return
+
         if self._recorder.device != config.MICROPHONE_DEVICE:
             self._recorder = Recorder(device=config.MICROPHONE_DEVICE)
         if self._transcriber.model_name != config.MODEL:
@@ -511,6 +578,11 @@ class App(tk.Tk):
             self._hotkey.restart(config.HOTKEY)
         except HotkeyListenerError as exc:
             logger.error("Failed to restart hotkey: %s", exc)
+            messagebox.showwarning(
+                "Tecla rápida no disponible",
+                f"No se pudo registrar la tecla {config.HOTKEY}.\n\n"
+                f"{exc}\n\nElige otra tecla en Configuración.",
+            )
         self._flash("⚙️  Configuración actualizada")
 
     def _flash_status(self, msg: str, color: str | None = None) -> None:
@@ -518,6 +590,17 @@ class App(tk.Tk):
         color = color or self.STATUS_COLOR.get(self._state, "#e0e0e0")
         self._status_lbl.configure(text=msg, fg=color)
         self._log_status(msg)
+
+    def _safe_after(self, func, *args, delay_ms: int = 0) -> None:
+        """Schedule func(*args) on the Tk thread from any thread (safe on close).
+
+        background threads (worker, pynput, preloader) may still be alive when
+        the window is destroyed; plain after() would raise TclError inside them.
+        """
+        try:
+            self.after(delay_ms, func, *args)
+        except tk.TclError:
+            logger.debug("after(%d) failed – app shutting down", delay_ms)
 
     def _force_paint(self) -> None:
         """Force immediate window repaint via Win32 API (works without focus)."""
@@ -535,17 +618,21 @@ class App(tk.Tk):
 
     def _on_close(self) -> None:
         """Close button → stop recording if active and exit."""
+        self._running = False
+
         if self._state == "recording":
             try:
                 self._recorder.stop()
             except Exception:
                 pass
 
+        # Never block the close on a long transcription: the thread is a
+        # daemon and its after() callbacks tolerate a destroyed window.
         if (
             self._transcription_thread is not None
             and self._transcription_thread.is_alive()
         ):
-            self._transcription_thread.join(timeout=3)
+            self._transcription_thread.join(timeout=1)
 
         if hasattr(self, "_hotkey"):
             self._hotkey.stop()
@@ -586,12 +673,13 @@ class App(tk.Tk):
         def _load() -> None:
             try:
                 self._transcriber.preload()
-                self.after(0, self._hide_progress)
-                self.after(0, self._flash_status, "Modelo listo", "#4ec9b0")
-                self.after(2_000, lambda: self._set_state(self._state))
             except Exception as exc:
                 logger.warning("Model preload failed (will retry on dictation): %s", exc)
-                self.after(0, self._hide_progress)
+                self._safe_after(self._hide_progress)
+                return
+            self._safe_after(self._hide_progress)
+            self._safe_after(self._flash_status, "Modelo listo", "#4ec9b0")
+            self._safe_after(self._set_state, self._state, delay_ms=2_000)
 
         threading.Thread(target=_load, daemon=True).start()
 

@@ -43,6 +43,17 @@ _CONFIG_KEYS = {
     "CHANNELS", "HOTKEY", "AUTO_COPY", "AUTO_SAVE", "MICROPHONE_DEVICE",
 }
 
+# Keys accepted by the global hotkey listener (pynput keyboard.Key names).
+_HOTKEY_ALLOWED = frozenset(
+    {f"f{n}" for n in range(1, 25)}
+    | {
+        "insert", "delete", "home", "end", "page_up", "page_down",
+        "caps_lock", "num_lock", "scroll_lock", "pause", "print_screen",
+        "media_play_pause", "media_stop", "media_previous", "media_next",
+        "media_volume_up", "media_volume_down", "media_volume_mute",
+    }
+)
+
 BASE_DIR: Path = Path(".")  # Project root or directory containing voz.exe
 MODEL_DIR: Path = Path(".")  # Where Whisper models are cached (outside .exe)
 OUTPUT_DIR: Path = Path(".")  # Batch transcription output
@@ -91,11 +102,13 @@ def init() -> None:
             MODEL = _validate_str(data.get("model"), "model", MODEL)
             DEVICE = _validate_str(data.get("device"), "device", DEVICE)
             COMPUTE_TYPE = _validate_str(data.get("compute_type"), "compute_type", COMPUTE_TYPE)
-            LANGUAGE = data.get("language", LANGUAGE)
-            HOTKEY = _validate_str(data.get("hotkey"), "hotkey", HOTKEY)
+            LANGUAGE = _validate_language(data.get("language"), LANGUAGE)
+            HOTKEY = _validate_hotkey(data.get("hotkey"), HOTKEY)
             AUTO_COPY = bool(data.get("auto_copy", AUTO_COPY))
             AUTO_SAVE = bool(data.get("auto_save", AUTO_SAVE))
-            MICROPHONE_DEVICE = data.get("microphone_device", MICROPHONE_DEVICE)
+            MICROPHONE_DEVICE = _validate_mic_device(
+                data.get("microphone_device"), MICROPHONE_DEVICE
+            )
             SAMPLE_RATE = _validate_positive_int(data.get("sample_rate"), "sample_rate", SAMPLE_RATE)
             CHANNELS = _validate_positive_int(data.get("channels"), "channels", CHANNELS)
             logger.info("Config loaded from %s", CONFIG_PATH)
@@ -138,14 +151,33 @@ def update(**kwargs) -> None:
     """Update config values at runtime without touching disk.
 
     Call save() afterwards if you want to persist.
-    Only keys in the _CONFIG_KEYS whitelist are accepted.
+    Only keys in the _CONFIG_KEYS whitelist are accepted, and the value
+    must type-check (no silent corruption from bad types at runtime).
     """
     for key, value in kwargs.items():
         if key not in _CONFIG_KEYS:
             logger.warning("Unknown config key (ignored): %s", key)
             continue
+        if not _type_ok(key, value):
+            logger.warning("Invalid type for config key %s (%r); ignored", key, value)
+            continue
         globals()[key] = value
         logger.debug("Config updated: %s = %r", key, value)
+
+
+def _type_ok(key: str, value: object) -> bool:
+    """Simple runtime type guard for config.update()."""
+    if key in ("MODEL", "DEVICE", "COMPUTE_TYPE", "LANGUAGE", "HOTKEY"):
+        return isinstance(value, str) and bool(value.strip())
+    if key in ("SAMPLE_RATE", "CHANNELS"):
+        return isinstance(value, int) and not isinstance(value, bool) and value > 0
+    if key in ("AUTO_COPY", "AUTO_SAVE"):
+        return isinstance(value, bool)
+    if key == "MICROPHONE_DEVICE":
+        if isinstance(value, bool):  # bool is a subclass of int – reject
+            return False
+        return value is None or (isinstance(value, int) and value >= 0)
+    return False
 
 
 def _validate_str(value: object, name: str, default: str) -> str:
@@ -161,4 +193,51 @@ def _validate_positive_int(value: object, name: str, default: int) -> int:
     if isinstance(value, int) and value > 0:
         return value
     logger.warning("Invalid config value for '%s' (%r), using default: %d", name, value, default)
+    return default
+
+
+def _validate_language(value: object, default: str) -> str:
+    """Return *value* if it is a valid language marker, otherwise *default*.
+
+    Accepts 'auto' (auto-detect) and 2-letter ISO-639-1 codes ('es', 'en'…).
+    Longer codes (e.g. 3-letter) are rejected: faster-whisper only takes
+    ISO-639-1 or None.
+    """
+    if isinstance(value, str):
+        candidate = value.strip().lower()
+        if candidate == "auto":
+            return candidate
+        if len(candidate) == 2 and candidate.isalpha() and candidate.isascii():
+            return candidate
+    logger.warning("Invalid config value for 'language' (%r), using default: %r", value, default)
+    return default
+
+
+def _validate_hotkey(value: object, default: str) -> str:
+    """Return *value* (uppercased) iff the key is bindable, else *default*.
+
+    The GUI listener can only bind 'special' keys (pynput keyboard.Key
+    attributes): F-keys, media keys, etc. A regular letter would make
+    HotkeyListener.start() raise and the app would run with no hotkey.
+    """
+    if isinstance(value, str):
+        candidate = value.strip().upper()
+        if candidate and candidate.lower() in _HOTKEY_ALLOWED:
+            return candidate
+    logger.warning("Invalid config value for 'hotkey' (%r), using default: %r", value, default)
+    return default
+
+
+def _validate_mic_device(value: object, default: Optional[int]) -> Optional[int]:
+    """Return *value* if it is a valid device index (int >= 0) or None."""
+    if isinstance(value, bool):
+        logger.warning("Invalid config value for 'microphone_device' (bool %r), using default: %r",
+                       value, default)
+        return default
+    if value is None:
+        return None
+    if isinstance(value, int) and value >= 0:
+        return value
+    logger.warning("Invalid config value for 'microphone_device' (%r), using default: %r",
+                   value, default)
     return default

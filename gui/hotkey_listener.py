@@ -39,21 +39,36 @@ class HotkeyListener:
         self._listener = None
         self._last_call: float = 0.0
 
+    @staticmethod
+    def is_supported(hotkey: str) -> bool:
+        """Return True if *hotkey* names a key pynput can bind globally.
+
+        Validates *before* saving config or stopping the running listener,
+        so a bad choice can never leave the app without a hotkey.
+        """
+        try:
+            from pynput import keyboard
+        except Exception:  # ImportError and native backend failures
+            return False
+        name = (hotkey or "").strip().lower()
+        return bool(name) and getattr(keyboard.Key, name, None) is not None
+
     def start(self, hotkey: str = "F10") -> None:
         """Begin listening for *hotkey* (e.g. 'F10', 'F9')."""
         from pynput import keyboard
 
-        self._key_name = hotkey.upper()
-        key = getattr(keyboard.Key, self._key_name.lower(), None)
+        name = (hotkey or "").strip().upper()
+        key = getattr(keyboard.Key, name.lower(), None) if name else None
 
         if key is None:
-            raise HotkeyListenerError(f"Unsupported hotkey: {hotkey}")
+            raise HotkeyListenerError(f"Unsupported hotkey: {hotkey!r}")
 
+        self._key_name = name
         self._key = key
         self._listener = keyboard.Listener(on_release=self._on_release)
         self._listener.daemon = True
         self._listener.start()
-        logger.info("Hotkey listener started: %s", hotkey)
+        logger.info("Hotkey listener started: %s", name)
 
     def _on_release(self, key) -> None:
         """Handle key-release events (ignores auto-repeat)."""
@@ -81,9 +96,23 @@ class HotkeyListener:
             logger.info("Hotkey listener stopped")
 
     def restart(self, hotkey: str) -> None:
-        """Stop and restart with a different hotkey. No-op if key unchanged."""
-        hotkey = hotkey.upper()
+        """Switch to a different hotkey — atomically.
+
+        The new listener is created and started FIRST; the running
+        listener is only stopped after the new one is alive. If the new
+        key is invalid, the old listener keeps working untouched.
+
+        No-op if the key is unchanged.
+        """
+        hotkey = (hotkey or "").strip().upper()
         if hotkey == self._key_name:
             return
+
+        replacement = HotkeyListener(self._callback)
+        replacement.start(hotkey)  # raises → self untouched
+
         self.stop()
-        self.start(hotkey)
+        self._listener = replacement._listener
+        self._key = replacement._key
+        self._key_name = replacement._key_name
+        logger.info("Hotkey listener restarted: %s", hotkey)

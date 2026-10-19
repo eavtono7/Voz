@@ -29,6 +29,7 @@ class TestImports:
 
 class TestStateMachine:
     def _make_app(self):
+        import gc
         import logging
 
         logging.disable(logging.CRITICAL)
@@ -47,8 +48,26 @@ class TestStateMachine:
 
                 with mock.patch.object(HotkeyListener, "start"):
                     with mock.patch.object(HotkeyListener, "stop"):
-                        app = App()
-                        return app
+                        # This Python/Tcl build intermittently fails to init
+                        # a fresh Tk interpreter in long-lived processes
+                        # (transient "couldn't read … auto.tcl"/ttk errors).
+                        # Previous roots' interps are kept alive until Python
+                        # GC runs, so collect first and retry once on
+                        # TclError during App(root) creation.
+                        last_exc: BaseException | None = None
+                        for attempt in range(2):
+                            try:
+                                gc.collect()
+                                app = App()
+                                return app
+                            except tk.TclError as exc:
+                                last_exc = exc
+                                logging.debug(
+                                    "Transient TclError creating App (attempt %d): %s",
+                                    attempt + 1, exc,
+                                )
+                        assert last_exc is not None
+                        raise last_exc
 
     def test_initial_state_is_idle(self) -> None:
         app = self._make_app()
@@ -67,6 +86,68 @@ class TestStateMachine:
         assert app._recorder is not None
         assert app._recorder.is_recording is False
         app.destroy()
+
+
+class TestHotkeyStateMachine:
+    """Fix 4 + Fix 6/7: hotkey handling across states, via the event queue."""
+
+    def _make_app(self):
+        return TestStateMachine._make_app(self)
+
+    def test_hotkey_in_idle_starts_recording(self) -> None:
+        from unittest import mock
+
+        app = self._make_app()
+        try:
+            with mock.patch.object(type(app._recorder), "start"):
+                app._handle_hotkey()
+                assert app._state == "recording"
+        finally:
+            app.destroy()
+
+    def test_hotkey_reaches_state_machine_via_queue(self) -> None:
+        from unittest import mock
+
+        app = self._make_app()
+        try:
+            with mock.patch.object(type(app._recorder), "start"):
+                app._on_hotkey()  # posts from "pynput thread" (main thread here)
+                app._poll_events()  # drive one poll cycle manually
+                assert app._state == "recording"
+        finally:
+            app.destroy()
+
+    def test_hotkey_in_done_cancels_idle_transition_and_records(self) -> None:
+        from unittest import mock
+
+        app = self._make_app()
+        try:
+            with mock.patch.object(type(app._recorder), "start"):
+                app._return_to_idle_id = app.after(10_000, lambda: None)
+                app._set_state("done", detail="2.5")
+                app._handle_hotkey()
+                assert app._state == "recording"
+                assert app._return_to_idle_id is None
+        finally:
+            app.destroy()
+
+    def test_hotkey_ignored_while_transcribing(self) -> None:
+        app = self._make_app()
+        try:
+            app._set_state("transcribing")
+            app._handle_hotkey()
+            assert app._state == "transcribing"  # dropped, no crash
+        finally:
+            app.destroy()
+
+    def test_transcripts_survive_but_status_logs_do_not(self) -> None:
+        app = self._make_app()
+        try:
+            app._transcripts.append("hola mundo")
+            assert app._current_transcripts() == "hola mundo"
+            assert app._current_transcripts() not in app._text.get("1.0", "end-1c")
+        finally:
+            app.destroy()
 
 
 class TestTranscriberModel:

@@ -16,6 +16,7 @@ import numpy as np
 import sounddevice as sd
 
 from core import config
+from core.audio import resample
 
 logger = logging.getLogger(__name__)
 
@@ -59,21 +60,31 @@ class Recorder:
         self.is_recording: bool = False
 
     def _detect_samplerate(self) -> int:
-        """Detect the native sample rate of the audio device."""
+        """Detect the native sample rate of the audio device.
+
+        With device=None we must ask for the default *input* device:
+        sd.query_devices() without *kind* returns the full device list,
+        which is not a dict and would always raise and hit the fallback.
+        """
         try:
-            device_info = sd.query_devices(self.device)
+            if self.device is None:
+                device_info = sd.query_devices(kind="input")
+            else:
+                device_info = sd.query_devices(self.device)
             native_sr = int(device_info['default_samplerate'])
             logger.info(
                 "Detected device %s native sample rate: %d Hz",
-                self.device or "default",
+                self.device if self.device is not None else "default",
                 native_sr,
             )
             return native_sr
         except Exception as exc:
             logger.warning(
-                "Could not detect native sample rate for device %s: %s. Using target rate.",
+                "Could not detect native sample rate for device %s: %s. "
+                "Using target rate %d Hz.",
                 self.device,
                 exc,
+                self.target_samplerate,
             )
             return self.target_samplerate
 
@@ -127,6 +138,10 @@ class Recorder:
     def stop(self) -> np.ndarray:
         """Close the stream and return captured audio.
 
+        The stream is fully torn down (stopped and closed, synchronously)
+        BEFORE the buffer is read, so no audio-thread callback can mutate
+        it while we concatenate.
+
         Returns:
             1-D float32 numpy array, shape (samples,).
             Empty array if nothing was captured.
@@ -136,21 +151,9 @@ class Recorder:
             return np.array([], dtype=np.float32)
 
         self.is_recording = False
+        self._teardown_stream()
 
-        # Tear down the stream (stop + close, even on failure)
-        if self._stream is not None:
-            try:
-                self._stream.stop()
-            except Exception as exc:
-                logger.error("Error while stopping audio stream: %s", exc)
-            finally:
-                try:
-                    self._stream.close()
-                except Exception as exc:
-                    logger.error("Error while closing audio stream: %s", exc)
-                self._stream = None
-
-        # Concatenate all buffered chunks
+        # Concatenate all buffered chunks.
         if not self._buffer:
             logger.warning("No audio data captured during recording")
             return np.array([], dtype=np.float32)
@@ -166,7 +169,7 @@ class Recorder:
                 self.samplerate,
                 self.target_samplerate,
             )
-            audio = self._resample(audio, self.samplerate, self.target_samplerate)
+            audio = resample(audio, self.samplerate, self.target_samplerate)
 
         duration = len(audio) / self.target_samplerate
         logger.info(
@@ -176,22 +179,35 @@ class Recorder:
         )
         return audio
 
+    def _teardown_stream(self) -> None:
+        """Stop and close the current stream (call before reading buffer)."""
+        if self._stream is None:
+            return
+        try:
+            self._stream.stop()
+        except Exception as exc:
+            logger.error("Error while stopping audio stream: %s", exc)
+        finally:
+            try:
+                self._stream.close()
+            except Exception as exc:
+                logger.error("Error while closing audio stream: %s", exc)
+            self._stream = None
+
     def _resample(self, audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
-        """Resample audio from orig_sr to target_sr using scipy."""
-        from scipy import signal
-
-        if orig_sr == target_sr:
-            return audio
-
-        # Calculate the number of samples in the resampled signal
-        num_samples = int(len(audio) * target_sr / orig_sr)
-        resampled = signal.resample(audio, num_samples)
-        return resampled.astype(np.float32)
+        """Resample audio from orig_sr to target_sr — delegates to core.audio."""
+        return resample(audio, orig_sr, target_sr)
 
     @property
     def recording_duration(self) -> float:
-        """Current duration of the ongoing recording, in seconds."""
+        """Current duration of the ongoing recording, in seconds.
+
+        Divides by the *native* rate because buffered chunks were captured
+        at that rate; resampling to target rate happens on stop(). This is
+        intentionally a different rate from transcribe()'s duration, which
+        is measured after resampling.
+        """
         if not self._buffer:
             return 0.0
         total = sum(len(chunk) for chunk in self._buffer)
-        return total / self.samplerate  # Use native rate during recording
+        return total / self.samplerate

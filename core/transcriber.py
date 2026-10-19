@@ -19,7 +19,26 @@ from typing import Optional
 import numpy as np
 
 from core.models import TranscriptionResult, Segment
+from core.audio import resample as _resample_audio
 from core import config
+
+# Values that mean "let Whisper detect the language" instead of a
+# specific ISO-639-1 code. "auto" comes from the settings dialog.
+_AUTO_LANGUAGE_VALUES = frozenset({"auto", "auto-detectar", "autodetectar", ""})
+
+
+def _normalize_language(lang: Optional[str]) -> Optional[str]:
+    """Map auto-detection markers to None (faster-whisper's auto mode).
+
+    'auto' is NOT a valid whisper language code: passing it straight
+    through makes the Tokenizer raise ValueError.
+    """
+    if lang is None:
+        return None
+    stripped = lang.strip().lower()
+    if not stripped or stripped in _AUTO_LANGUAGE_VALUES:
+        return None
+    return stripped
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +171,7 @@ class Transcriber:
         logger.info("transcribe() called, audio samples: %d", len(audio))
         self._load_model()
 
-        lang = language or config.LANGUAGE or None
+        lang = _normalize_language(language or config.LANGUAGE or None)
         duration = len(audio) / config.SAMPLE_RATE
 
         logger.info(
@@ -187,7 +206,12 @@ class Transcriber:
             logger.debug("Iterating over segments")
             for seg in segments_gen:
                 text = seg.text.strip()
-                logger.debug("Segment: start=%.2f end=%.2f text='%s'", seg.start, seg.end, text)
+                logger.debug(
+                    "Segment: start=%.2f end=%.2f chars=%d",
+                    seg.start,
+                    seg.end,
+                    len(text),
+                )
                 segment = Segment(
                     start=round(seg.start, 2),
                     end=round(seg.end, 2),
@@ -296,13 +320,5 @@ def load_audio(path: Path, target_sr: int = 16_000) -> np.ndarray:
 def _resample(
     audio: np.ndarray, orig_sr: int, target_sr: int
 ) -> np.ndarray:
-    """Resample audio to *target_sr* using FFT-based resampling."""
-    from scipy import signal
-
-    if orig_sr == target_sr:
-        return audio
-
-    num_samples = int(len(audio) * target_sr / orig_sr)
-    resampled = signal.resample(audio, num_samples)
-    logger.debug("Resampled %d→%d Hz  %d→%d samples", orig_sr, target_sr, len(audio), num_samples)
-    return resampled.astype(np.float32)
+    """Resample audio to *target_sr* — delegates to core.audio.resample."""
+    return _resample_audio(audio, orig_sr, target_sr)

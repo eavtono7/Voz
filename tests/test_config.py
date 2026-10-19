@@ -177,3 +177,105 @@ class TestValidation:
         )
         config.init()
         assert config.MODEL == "turbo"
+
+    def test_language_auto_accepted(self, isolated: None, tmp_path: Path) -> None:
+        tmp_path.joinpath("config.json").write_text(
+            json.dumps({"language": "AUTO"}), encoding="utf-8"
+        )
+        config.init()
+        assert config.LANGUAGE == "auto"
+
+    def test_language_3letter_rejected(self, isolated: None, tmp_path: Path) -> None:
+        tmp_path.joinpath("config.json").write_text(
+            json.dumps({"language": "spa"}), encoding="utf-8"
+        )
+        config.init()
+        assert config.LANGUAGE == "es"
+
+    def test_microphone_device_string_rejected(
+        self, isolated: None, tmp_path: Path
+    ) -> None:
+        tmp_path.joinpath("config.json").write_text(
+            json.dumps({"microphone_device": "1"}), encoding="utf-8"
+        )
+        config.init()
+        assert config.MICROPHONE_DEVICE is None
+
+    def test_microphone_device_bool_rejected(
+        self, isolated: None, tmp_path: Path
+    ) -> None:
+        tmp_path.joinpath("config.json").write_text(
+            json.dumps({"microphone_device": True}), encoding="utf-8"
+        )
+        config.init()
+        assert config.MICROPHONE_DEVICE is None
+
+    def test_microphone_device_index_zero_valid(
+        self, isolated: None, tmp_path: Path
+    ) -> None:
+        tmp_path.joinpath("config.json").write_text(
+            json.dumps({"microphone_device": 0}), encoding="utf-8"
+        )
+        config.init()
+        assert config.MICROPHONE_DEVICE == 0
+
+    def test_hotkey_letter_rejected(self, isolated: None, tmp_path: Path) -> None:
+        tmp_path.joinpath("config.json").write_text(
+            json.dumps({"hotkey": "K"}), encoding="utf-8"
+        )
+        config.init()
+        assert config.HOTKEY == "F10"
+
+    def test_hotkey_valid_normalized_upper(self, isolated: None, tmp_path: Path) -> None:
+        tmp_path.joinpath("config.json").write_text(
+            json.dumps({"hotkey": "f9"}), encoding="utf-8"
+        )
+        config.init()
+        assert config.HOTKEY == "F9"
+
+    def test_hotkey_insert_accepted(self, isolated: None, tmp_path: Path) -> None:
+        tmp_path.joinpath("config.json").write_text(
+            json.dumps({"hotkey": "insert"}), encoding="utf-8"
+        )
+        config.init()
+        assert config.HOTKEY == "INSERT"
+
+
+class TestUpdateTypeGuard:
+    def test_update_rejects_mismatched_types(self, isolated: None) -> None:
+        config.init()
+        before = (
+            config.MODEL,
+            config.HOTKEY,
+            config.SAMPLE_RATE,
+            config.CHANNELS,
+            config.AUTO_COPY,
+            config.AUTO_SAVE,
+            config.MICROPHONE_DEVICE,
+        )
+        config.update(
+            MODEL=None,
+            HOTKEY=123,
+            SAMPLE_RATE="x",
+            CHANNELS=True,
+            AUTO_COPY=1,
+            AUTO_SAVE="yes",
+            MICROPHONE_DEVICE="1",
+        )
+        after = (
+            config.MODEL,
+            config.HOTKEY,
+            config.SAMPLE_RATE,
+            config.CHANNELS,
+            config.AUTO_COPY,
+            config.AUTO_SAVE,
+            config.MICROPHONE_DEVICE,
+        )
+        assert before == after
+
+    def test_valid_update_still_applies(self, isolated: None) -> None:
+        config.init()
+        config.update(MICROPHONE_DEVICE=0, SAMPLE_RATE=48000, AUTO_COPY=False)
+        assert config.MICROPHONE_DEVICE == 0
+        assert config.SAMPLE_RATE == 48000
+        assert config.AUTO_COPY is False

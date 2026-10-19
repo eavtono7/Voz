@@ -13,6 +13,7 @@ from tkinter import ttk
 from typing import Callable, Optional
 
 from core import config
+from gui.hotkey_listener import HotkeyListener
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ class SettingsWindow(tk.Toplevel):
         self._sep = "#3a3a3a"
         self.configure(bg=self._bg)
 
-        self._mic_devices: list[tuple[int, str]] = []  # [(index, name), ...]
+        self._mic_devices: list[tuple[Optional[int], str]] = []  # [(index, label), ...]
         self._mic_var = tk.StringVar()
         self._lang_var = tk.StringVar()
         self._model_var = tk.StringVar()
@@ -155,7 +156,11 @@ class SettingsWindow(tk.Toplevel):
 
         # ── Hotkey section ─────────────────────────────────────────────
         self._section_header(main, "Atajo de teclado")
-        self._section_hint(main, "Tecla global para iniciar/detener grabación.")
+        self._section_hint(
+            main,
+            "Tecla global para iniciar/detener grabación.\n"
+            "Teclas soportadas: F1–F24, Insert, Delete…",
+        )
 
         hk_frame = tk.Frame(main, bg=self._bg)
         hk_frame.pack(fill="x", pady=(6, 16))
@@ -267,13 +272,20 @@ class SettingsWindow(tk.Toplevel):
         "salida", "output", "altavoz", "speaker",
     ]
 
+    _SYSTEM_MIC_LABEL = "🎙️ Sistema (por defecto)"
+
     def _populate_mics(self) -> None:
         try:
             import sounddevice as sd
 
             devices = sd.query_devices()
             self._mic_devices.clear()
-            seen: set[str] = set()
+            labels: list[str] = []
+
+            # "Default" first: device=None → Recorder detects the native
+            # input rate of the system default input device.
+            self._mic_devices.append((None, self._SYSTEM_MIC_LABEL))
+            labels.append(self._SYSTEM_MIC_LABEL)
 
             for i, d in enumerate(devices):
                 if d["max_input_channels"] <= 0:
@@ -282,26 +294,21 @@ class SettingsWindow(tk.Toplevel):
                 name_lower = name.lower()
                 if any(kw in name_lower for kw in self._NON_MIC_KEYWORDS):
                     continue
-                if name in seen:
-                    continue
-                seen.add(name)
-                self._mic_devices.append((i, name))
+                # Index always shown: identical device names (same model on
+                # two hosts/APIs) are distinct devices and must stay selectable.
+                label = f"{name} — {d['hostapi']} (#{i})"
+                self._mic_devices.append((i, label))
+                labels.append(label)
 
-            names = [n for _, n in self._mic_devices]
-
-            self._mic_combo["values"] = names
-
-            if not names:
-                return
+            self._mic_combo["values"] = labels
 
             cur = config.MICROPHONE_DEVICE
-            if cur is not None:
-                for idx, name in self._mic_devices:
-                    if idx == cur:
-                        self._mic_combo.set(name)
-                        return
-
-            self._mic_combo.set(names[0])
+            for idx, label in self._mic_devices:
+                if idx == cur:
+                    self._mic_combo.set(label)
+                    return
+            # Config index not among current devices (stale config.json)
+            self._mic_combo.set(labels[0])
         except Exception as exc:
             logger.warning("Could not enumerate microphones: %s", exc)
 
@@ -315,9 +322,9 @@ class SettingsWindow(tk.Toplevel):
         self._auto_save_var.set(config.AUTO_SAVE)
 
     def _selected_mic_index(self) -> Optional[int]:
-        name = self._mic_var.get()
-        for idx, dev_name in self._mic_devices:
-            if dev_name == name:
+        label = self._mic_var.get()
+        for idx, dev_label in self._mic_devices:
+            if dev_label == label:
                 return idx
         return config.MICROPHONE_DEVICE
 
@@ -328,6 +335,19 @@ class SettingsWindow(tk.Toplevel):
 
             messagebox.showerror(
                 "Error", "La tecla rápida no puede estar vacía.", parent=self
+            )
+            self._hotkey_entry.focus_set()
+            return
+
+        if not HotkeyListener.is_supported(hotkey):
+            from tkinter import messagebox
+
+            messagebox.showerror(
+                "Error",
+                f"La tecla \u00ab{hotkey}\u00bb no está soportada.\n\n"
+                "Usa una tecla especial como F1–F24, Insert, Delete, "
+                "Page Up, media…",
+                parent=self,
             )
             self._hotkey_entry.focus_set()
             return
