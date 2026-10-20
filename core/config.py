@@ -82,7 +82,15 @@ def init() -> None:
         BASE_DIR = Path(__file__).resolve().parent.parent
 
     # ── Resolve all paths ─────────────────────────────────────────────────
-    MODEL_DIR = BASE_DIR / "models" / "whisper"
+    if getattr(sys, "frozen", False):
+        # exe mode: bundle dir is dist/voz → model next to the .exe
+        MODEL_DIR = BASE_DIR / "models" / "whisper"
+    else:
+        # script mode: point at the SAME physical folder the exe uses
+        # (dist/voz/models/whisper), so the model is downloaded exactly once
+        # no matter which entry point is used. Keeps the app self-contained:
+        # everything lives inside dist/voz.
+        MODEL_DIR = BASE_DIR / "dist" / "voz" / "models" / "whisper"
     OUTPUT_DIR = BASE_DIR / "data" / "output"
     DICTATIONS_DIR = BASE_DIR / "data" / "dictations"
     CONFIG_PATH = BASE_DIR / "config.json"

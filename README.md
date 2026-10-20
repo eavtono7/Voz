@@ -72,8 +72,15 @@ voz/
 ├── data/
 │   ├── dictations/          ← Transcripciones guardadas (.json + .txt)
 │   └── voz.log              ← Log de actividad
-└── models/
-    └── whisper/             ← Modelo Whisper cacheado
+└── dist/
+    └── voz/
+        ├── voz.exe              ← Aplicación compilada
+        └── models/
+            └── whisper/         ← Modelo Whisper cacheado (Copia Única)
+
+> 💡 Existe **un solo modelo en todo el proyecto**: `dist/voz/models/whisper/`.
+> El `.exe` y `main.py` (modo script) apuntan ambos a esa misma carpeta,
+> así no importa cómo inicies la app — la descarga ocurre exactamente una vez.
 ```
 
 ### Principios arquitectónicos
@@ -105,8 +112,10 @@ voz/
 ### ¿Por qué `--onedir` y no `--onefile`?
 
 El modelo Whisper pesa ~1.5 GB. PyInstaller no puede empaquetar eso dentro de un solo `.exe`
-de forma práctica. El modelo se guarda en `models/whisper/` junto al ejecutable
-para que toda la app viva en una sola carpeta autocontenida.
+de forma práctica. El modelo se guarda en `dist/voz/models/whisper/` junto al ejecutable
+para que toda la app viva en una sola carpeta autocontenida. Al ejecutar `main.py` en
+modo desarrollo, `config.py` apunta a la **misma carpeta física**, evitando descargas
+duplicadas dentro del proyecto.
 
 ### ¿Por qué Turbo y no Small/Base?
 Whisper **turbo** ofrece la mejor relación calidad/velocidad. En una Beelink Ryzen 7 7840HS, transcribe 60 segundos de audio en ~14 segundos (tras la carga inicial). Consume ~1.2 GB de RAM.

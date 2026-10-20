@@ -6,7 +6,9 @@
 #   data\                dictations + voz.log
 #   models\whisper\      downloaded Whisper model (~1.5 GB)
 # This script closes a running app, snapshots those files, builds, and
-# restores them into the fresh dist\voz\.
+# restores them into the fresh dist\voz\. The snapshot in .build-backup\
+# is recreated from scratch each build and dropped after a successful
+# restore, so the model never ends up duplicated on disk.
 
 $ErrorActionPreference = "Stop"
 
@@ -24,6 +26,7 @@ if ($proc) {
 $dist   = "dist\voz"
 $backup = ".build-backup"
 if (Test-Path $dist) {
+    if (Test-Path $backup) { Remove-Item $backup -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $backup | Out-Null
     foreach ($name in @("config.json", "data", "models")) {
         $src = Join-Path $dist $name
@@ -46,9 +49,15 @@ foreach ($name in @("config.json", "data", "models")) {
     $bak = Join-Path $backup $name
     if (Test-Path $bak) {
         Write-Host "Restoring $name -> $dist"
-        Copy-Item $bak (Join-Path $dist $name) -Recurse -Force
+        $dst = Join-Path $dist $name
+        if (Test-Path $dst) { Remove-Item $dst -Recurse -Force }
+        Copy-Item $bak $dst -Recurse -Force
     }
 }
+
+# 4) Drop the snapshot once restored. Keeping models\ here would be a
+#    ~1.5 GB duplicate of the live cache in dist\voz\models\.
+if (Test-Path $backup) { Remove-Item $backup -Recurse -Force }
 
 Write-Host ""
 Write-Host "OK: dist\voz\voz.exe rebuilt (config/data/models preserved)." -ForegroundColor Green
