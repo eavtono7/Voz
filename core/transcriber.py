@@ -86,7 +86,8 @@ class Transcriber:
 
             from faster_whisper import WhisperModel
 
-            if not self.is_model_cached():
+            snapshot = self._cached_snapshot_path()
+            if snapshot is None:
                 logger.info("Model not cached locally — will download first")
             else:
                 logger.info("Model cached locally — loading from disk")
@@ -101,8 +102,15 @@ class Transcriber:
 
             try:
                 logger.debug("Creating WhisperModel instance")
+                if snapshot is not None:
+                    # Point at the local snapshot dir: zero network access,
+                    # app works fully offline with the cached files.
+                    model_root = str(snapshot)
+                else:
+                    model_root = self.model_name
+
                 self._model = WhisperModel(
-                    self.model_name,
+                    model_root,
                     device=self.device,
                     compute_type=self.compute_type,
                     download_root=str(config.MODEL_DIR),
@@ -137,6 +145,14 @@ class Transcriber:
         Works with any model by scanning for huggingface cache directories
         or direct-download model files under MODEL_DIR.
         """
+        return self._cached_snapshot_path() is not None
+
+    def _cached_snapshot_path(self) -> Optional[Path]:
+        """Return the local snapshot dir containing model.bin, or None.
+
+        Used to load the model straight from disk, bypassing Hugging Face
+        network calls entirely (works offline, no metadata probes).
+        """
         model_dir = config.MODEL_DIR
 
         for candidate in model_dir.glob("models--*"):
@@ -144,12 +160,12 @@ class Transcriber:
                 snaps = candidate / "snapshots"
                 if snaps.exists():
                     for snap_dir in snaps.iterdir():
-                        if snap_dir.is_dir() and (snap_dir / "model.bin").exists():
-                            return True
+                        if (snap_dir / "model.bin").is_file():
+                            return snap_dir
 
-        if (model_dir / "model.bin").exists():
-            return True
-        return False
+        if (model_dir / "model.bin").is_file():
+            return model_dir
+        return None
 
     def transcribe(
         self,

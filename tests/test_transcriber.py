@@ -129,3 +129,70 @@ class TestTranscribeErrors:
 
         with pytest.raises(TranscriberError):
             t.transcribe(np.zeros(1600, dtype=np.float32))
+
+
+class _FakeWhisperModel:
+    """Records the model_root passed to WhisperModel."""
+
+    last_root: Any = None
+
+    def __init__(self, model_size_or_path: str, **kwargs: Any) -> None:
+        _FakeWhisperModel.last_root = model_size_or_path
+
+
+class TestLocalSnapshotLoading:
+    """Regression: cached models must load from disk, never via HF network."""
+
+    def test_cached_snapshot_path_found(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        snapshot = tmp_path / "models--fake--model" / "snapshots" / "abc123"
+        snapshot.mkdir(parents=True)
+        (snapshot / "model.bin").write_bytes(b"x")
+        monkeypatch.setattr(config, "MODEL_DIR", tmp_path)
+
+        t = Transcriber()
+        assert t._cached_snapshot_path() == snapshot
+
+    def test_cached_flat_model_bin(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "model.bin").write_bytes(b"x")
+        monkeypatch.setattr(config, "MODEL_DIR", tmp_path)
+
+        t = Transcriber()
+        assert t._cached_snapshot_path() == tmp_path
+
+    def test_no_cache_returns_none(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(config, "MODEL_DIR", tmp_path)
+        assert Transcriber()._cached_snapshot_path() is None
+
+    def test_load_uses_local_path_when_cached(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Offline-safe: the snapshot dir is passed instead of the repo id."""
+        snapshot = tmp_path / "models--fake--model" / "snapshots" / "abc123"
+        snapshot.mkdir(parents=True)
+        (snapshot / "model.bin").write_bytes(b"x")
+        monkeypatch.setattr(config, "MODEL_DIR", tmp_path)
+        monkeypatch.setattr("faster_whisper.WhisperModel", _FakeWhisperModel)
+
+        t = Transcriber()
+        t._load_model()
+
+        assert _FakeWhisperModel.last_root == str(snapshot)
+        assert t.is_model_loaded
+
+    def test_load_uses_repo_name_when_not_cached(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config.MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(config, "MODEL_DIR", tmp_path)
+        monkeypatch.setattr("faster_whisper.WhisperModel", _FakeWhisperModel)
+
+        t = Transcriber()
+        t._load_model()
+
+        assert _FakeWhisperModel.last_root == t.model_name
