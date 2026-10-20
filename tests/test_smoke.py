@@ -150,6 +150,139 @@ class TestHotkeyStateMachine:
             app.destroy()
 
 
+class TestFeedback:
+    """Live counters, friendly errors and rich done message."""
+
+    def _make_app(self):
+        return TestStateMachine._make_app(self)
+
+    def test_recording_tick_updates_status(self) -> None:
+        from unittest import mock
+
+        app = self._make_app()
+        try:
+            app._set_state("recording")
+            with mock.patch.object(
+                type(app._recorder),
+                "recording_duration",
+                new_callable=mock.PropertyMock,
+                return_value=1.2,
+            ):
+                app._tick_recording()
+            assert "1.2s" in app._status_lbl.cget("text")
+            assert app._state == "recording"
+        finally:
+            app.destroy()
+
+    def test_tick_ignores_when_not_recording(self) -> None:
+        app = self._make_app()
+        try:
+            app._set_state("transcribing")
+            before = app._status_lbl.cget("text")
+            app._tick_recording()
+            assert app._status_lbl.cget("text") == before
+        finally:
+            app.destroy()
+
+    def test_transcribing_shows_audio_duration(self) -> None:
+        app = self._make_app()
+        try:
+            app._set_state("transcribing")
+            app._show_transcribing_duration(7.3)
+            assert "7.3s de audio" in app._status_lbl.cget("text")
+            assert app._state == "transcribing"
+        finally:
+            app.destroy()
+
+    def test_done_message_full_context(self) -> None:
+        import types
+        from unittest import mock
+
+        import core.config as config
+
+        app = self._make_app()
+        try:
+            with mock.patch.object(config, "AUTO_COPY", False), \
+                 mock.patch.object(config, "AUTO_SAVE", False), \
+                 mock.patch.object(type(app._clipboard), "copy", return_value=True):
+                result = types.SimpleNamespace(
+                    text="hola mundo", duration=7.3, language="es"
+                )
+                app._on_transcription_done(result, 1.5)
+            text = app._status_lbl.cget("text")
+            assert "7.3s de audio" in text
+            assert "10 caracteres" in text
+            assert "1.5s de proceso" in text
+            assert app._state == "done"
+        finally:
+            app.destroy()
+
+    def test_friendly_error_mapping(self) -> None:
+        from gui.dictation_app import App
+
+        cases = {
+            "Failed to open microphone (device=1): boom": "Micrófono no disponible",
+            "[Errno -996] Invalid input device": "Micrófono no disponible",
+            "Device is busy": "Micrófono en uso",
+            "Cannot transcribe empty audio": "No se capturó audio",
+            "'auto' is not a valid language code": "Idioma inválido",
+            "Error downloading model from huggingface": "Error de red",
+        }
+        for raw, expected in cases.items():
+            assert expected in App._friendly_error(raw), raw
+
+        assert App._friendly_error("x" * 300) == "x" * 120  # truncated passthrough
+
+    def test_error_state_uses_friendly_and_logs_raw(self) -> None:
+        app = self._make_app()
+        try:
+            app._on_transcription_error("Unable to open microphone: boom")
+            assert "Micrófono no disponible" in app._status_lbl.cget("text")
+            assert app._state == "error"
+            widget = app._text.get("1.0", "end-1c")
+            assert "Unable to open microphone: boom" in widget  # raw kept
+        finally:
+            app.destroy()
+
+    def test_flash_restore_cancels_previous(self) -> None:
+        from unittest import mock
+
+        app = self._make_app()
+        try:
+            cancelled: list = []
+            with mock.patch.object(
+                app, "after_cancel", side_effect=lambda i: cancelled.append(i)
+            ):
+                app._flash("uno")
+                first = app._flash_restore_id
+                assert first is not None
+                app._flash("dos")
+                assert first in cancelled
+                assert app._flash_restore_id != first
+        finally:
+            app.destroy()
+
+    def test_close_cancels_feedback_timers(self) -> None:
+        import types
+        from unittest import mock
+
+        app = self._make_app()
+        cancelled: list = []
+        with mock.patch.object(app, "after_cancel", side_effect=lambda i: cancelled.append(i)):
+            app._set_state("recording")
+            app._start_recording_tick()
+            app._flash("algo")
+            tick_id = app._recording_tick_id
+            flash_id = app._flash_restore_id
+            app._transcription_thread = types.SimpleNamespace(
+                is_alive=lambda: False, join=lambda timeout=None: None
+            )
+            app._on_close()
+            assert tick_id in cancelled
+            assert flash_id in cancelled
+        # destroy already done by _on_close
+
+
 class TestTranscriberModel:
     def test_is_model_cached_does_not_crash(self) -> None:
         from core.transcriber import Transcriber

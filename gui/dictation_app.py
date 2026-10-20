@@ -21,6 +21,7 @@ import ctypes
 import logging
 import queue
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox
@@ -43,11 +44,11 @@ class App(tk.Tk):
     # ── State definitions ────────────────────────────────────────────────
     STATUS_TEXT: dict[str, str] = {
         "idle":         "🟢  Listo — presiona {} para grabar",
-        "recording":    "🔴  Grabando... — presiona {} para detener",
-        "transcribing": "🟡  Transcribiendo...",
+        "recording":    "🔴  Grabando... {0:.1f}s — {1} para detener",
+        "transcribing": "🟡  Transcribiendo audio...",
         "copying":      "📋  Copiando al portapapeles...",
         "storing":      "💾  Guardando...",
-        "done":         "✅  ¡Listo! — {:.1f}s transcritos",
+        "done":         "✅  Listo — {0:.1f}s de audio · {1} caracteres · {2:.1f}s de proceso",
         "error":        "❌  {}",
     }
 
@@ -70,8 +71,14 @@ class App(tk.Tk):
 
         # ── State ────────────────────────────────────────────────────────
         self._state: str = "idle"
-        self._last_duration: float = 0.0
         self._session_count: int = 0
+
+        # ── Feedback timers / done-context ──────────────────────────────
+        self._recording_tick_id: str | None = None
+        self._flash_restore_id: str | None = None
+        self._last_audio_secs: float = 0.0
+        self._last_chars: int = 0
+        self._last_proc_secs: float = 0.0
 
         # ── Core modules (no file I/O, no mic access on init) ────────────
         self._recorder = Recorder(device=config.MICROPHONE_DEVICE)
@@ -322,13 +329,12 @@ class App(tk.Tk):
         if state == "idle":
             text = template.format(hotkey)
         elif state == "recording":
-            text = template.format(hotkey)
+            # Live counter fed by _tick_recording between _set_state calls
+            text = template.format(self._recorder.recording_duration, hotkey)
         elif state == "done":
-            dur = detail if detail else self._last_duration
-            try:
-                text = template.format(float(dur))
-            except (ValueError, TypeError):
-                text = template.format(0.0)
+            text = template.format(
+                self._last_audio_secs, self._last_chars, self._last_proc_secs
+            )
         elif state == "error":
             text = template.format(detail or "Error desconocido")
         else:
@@ -340,6 +346,74 @@ class App(tk.Tk):
         )
         self._force_paint()
 
+    # ── Friendly errors ───────────────────────────────────────────────────
+
+    _ERROR_PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
+        (
+            (
+                "microphone",
+                "input device",
+                "no default input",
+                "unable to open",
+                "invalid input device",
+                "device not found",
+                "format not supported",
+            ),
+            "Micrófono no disponible — revisa Configuración",
+        ),
+        (("busy", "in use", "already in use"), "Micrófono en uso por otra aplicación"),
+        (("empty audio", "cannot transcribe empty"), "No se capturó audio"),
+        (("language code", "not a valid language"), "Idioma inválido — revisa Configuración"),
+        (
+            ("download", "connection", "huggingface", "network", "timeout"),
+            "Error de red al descargar el modelo",
+        ),
+    )
+
+    @staticmethod
+    def _friendly_error(detail: str) -> str:
+        """Map raw exception text to a short Spanish user-facing message.
+
+        The raw detail is always preserved in the widget log and voz.log;
+        this only shapes what the status bar shows.
+        """
+        low = (detail or "").lower()
+        for patterns, friendly in App._ERROR_PATTERNS:
+            if any(p in low for p in patterns):
+                return friendly
+        return (detail or "Error desconocido")[:120]
+
+    # ── Recording tick (live seconds counter) ────────────────────────────
+
+    _REC_TICK_MS = 500
+
+    def _start_recording_tick(self) -> None:
+        """Schedule the live recording counter (cancels any previous one)."""
+        self._cancel_recording_tick()
+        self._recording_tick_id = self.after(self._REC_TICK_MS, self._tick_recording)
+
+    def _cancel_recording_tick(self) -> None:
+        if self._recording_tick_id is not None:
+            try:
+                self.after_cancel(self._recording_tick_id)
+            except Exception:
+                pass
+            self._recording_tick_id = None
+
+    def _tick_recording(self) -> None:
+        """Refresh the status bar with the seconds actually captured."""
+        if self._state != "recording" or not self._running:
+            self._recording_tick_id = None
+            return
+        self._status_lbl.configure(
+            text=self.STATUS_TEXT["recording"].format(
+                self._recorder.recording_duration, config.HOTKEY
+            ),
+            fg=self.STATUS_COLOR["recording"],
+        )
+        self._force_paint()
+        self._recording_tick_id = self.after(self._REC_TICK_MS, self._tick_recording)
+
     # ── Transitions ───────────────────────────────────────────────────────
 
     def _start_recording(self) -> None:
@@ -350,14 +424,15 @@ class App(tk.Tk):
             self._recorder.start()
             logger.info("Recorder started successfully")
             self._set_state("recording")
+            self._start_recording_tick()
             self._log_status("🎙️  Grabación iniciada — habla ahora")
         except RecorderError as exc:
             logger.error("RecorderError: %s", exc, exc_info=True)
-            self._set_state("error", str(exc))
+            self._set_state("error", self._friendly_error(str(exc)))
             self._log_status(f"❌  Error: {exc}")
         except Exception as exc:
             logger.error("Unexpected error in _start_recording: %s", exc, exc_info=True)
-            self._set_state("error", str(exc))
+            self._set_state("error", self._friendly_error(str(exc)))
             self._log_status(f"❌  Error inesperado: {exc}")
 
     def _stop_and_transcribe(self) -> None:
@@ -367,6 +442,7 @@ class App(tk.Tk):
         concat + resample) — never run it on the UI thread.
         """
         logger.info("_stop_and_transcribe called")
+        self._cancel_recording_tick()  # stop the live counter
         self._set_state("transcribing")
         self._log_status("🔄  Transcribiendo...")
 
@@ -404,11 +480,20 @@ class App(tk.Tk):
             )
             self._safe_after(self._flash_status, msg, "#dcdcaa")
 
+        audio_secs = len(audio) / config.SAMPLE_RATE
+        self._safe_after(self._show_transcribing_duration, audio_secs)
+
         try:
             logger.info("Worker transcribing %d samples", len(audio))
+            t0 = time.monotonic()
             result = self._transcriber.transcribe(audio)
-            logger.info("Transcription completed, text length: %d", len(result.text))
-            self._safe_after(self._on_transcription_done, result)
+            proc_secs = time.monotonic() - t0
+            logger.info(
+                "Transcription completed, text length: %d, proc %.2fs",
+                len(result.text),
+                proc_secs,
+            )
+            self._safe_after(self._on_transcription_done, result, proc_secs)
         except TranscriberError as exc:
             logger.exception("Transcription failed")
             self._safe_after(self._on_transcription_error, str(exc))
@@ -425,11 +510,14 @@ class App(tk.Tk):
             logger.error("Auto-save failed: %s", exc)
             self._safe_after(self._flash, f"⚠️  Auto-guardado falló: {exc}")
 
-    def _on_transcription_done(self, result) -> None:
+    def _on_transcription_done(self, result, proc_secs: float = 0.0) -> None:
         """TRANSCRIBING → COPYING → STORING → DONE"""
         logger.info("_on_transcription_done called, text: %s", result.text[:50] if result.text else "(empty)")
         self._session_count += 1
         dur = result.duration
+        self._last_audio_secs = dur
+        self._last_chars = len(result.text)
+        self._last_proc_secs = proc_secs
 
         # ── Copy ─────────────────────────────────────────────────────
         if config.AUTO_COPY:
@@ -458,23 +546,38 @@ class App(tk.Tk):
 
         # ── Done → idle after 2 s ────────────────────────────────────
         logger.info("Setting state to done, will return to idle in 2s")
-        self._set_state("done", detail=dur)
-        self._log_status(f"✅  Transcripción completada ({dur:.1f}s)")
+        self._set_state("done")
+        self._log_status(
+            f"✅  Transcripción completada "
+            f"({dur:.1f}s audio · {len(result.text)} chars · {proc_secs:.1f}s proceso)"
+        )
         self._return_to_idle_id = self.after(2_000, self._return_to_idle)
 
     def _on_transcription_error(self, msg: str) -> None:
-        """TRANSCRIBING → ERROR"""
+        """TRANSCRIBING → ERROR (friendly in the bar, raw in the widget log)."""
         logger.error("_on_transcription_error called: %s", msg)
-        self._set_state("error", msg)
+        self._set_state("error", self._friendly_error(msg))
         self._log_status(f"❌  Error de transcripción: {msg}")
 
     def _on_empty_audio(self) -> None:
         """TRANSCRIBING → IDLE (worker produced no samples)."""
+        self._cancel_recording_tick()
         self._set_state("idle")
         self._log_status("⚠️  No se capturó audio")
         if self._pending_settings:
             self._pending_settings = False
             self._on_settings_saved()
+
+    def _show_transcribing_duration(self, audio_secs: float) -> None:
+        """Show how much recorded audio is being processed (Tk thread only)."""
+        if self._state != "transcribing":
+            return
+        self._status_lbl.configure(
+            text=f"🟡  Transcribiendo {audio_secs:.1f}s de audio...",
+            fg=self.STATUS_COLOR["transcribing"],
+        )
+        self._force_paint()
+        self._log_status(f"⏳  {audio_secs:.1f}s de audio en transcripción")
 
     def _return_to_idle(self) -> None:
         """DONE → IDLE"""
@@ -611,14 +714,32 @@ class App(tk.Tk):
             pass
 
     def _flash(self, msg: str) -> None:
-        """Show a temporary message in the status bar (2.5 s)."""
+        """Show a temporary message in the status bar (2.5 s).
+
+        Only one restore timer is ever pending: a new flash cancels the
+        previous restore, otherwise stacked restores repaint stale states.
+        """
         self._status_lbl.configure(text=msg, fg="#4ec9b0")
         self._force_paint()
-        self.after(2_500, lambda: self._set_state(self._state))
+        if self._flash_restore_id is not None:
+            try:
+                self.after_cancel(self._flash_restore_id)
+            except Exception:
+                pass
+        self._flash_restore_id = self.after(
+            2_500, lambda: self._set_state(self._state)
+        )
 
     def _on_close(self) -> None:
         """Close button → stop recording if active and exit."""
         self._running = False
+        self._cancel_recording_tick()
+        if self._flash_restore_id is not None:
+            try:
+                self.after_cancel(self._flash_restore_id)
+            except Exception:
+                pass
+            self._flash_restore_id = None
 
         if self._state == "recording":
             try:
