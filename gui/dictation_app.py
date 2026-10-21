@@ -103,6 +103,7 @@ class App(tk.Tk):
         self._pending_settings: bool = False
         self._pending_hotkey: bool = False  # hotkey pressed mid-transcription
         self._unload_timer_id: str | None = None
+        self._model_asleep: bool = False  # model freed from RAM by idle TTL
 
         # ── Build UI ─────────────────────────────────────────────────────
         logger.debug("Building UI...")
@@ -339,6 +340,8 @@ class App(tk.Tk):
 
         if state == "idle":
             text = template.format(hotkey)
+            if self._model_asleep and not self._transcriber.is_model_loaded:
+                text += "  ·  💤 modelo en reposo (recarga ~3 s)"
         elif state == "recording":
             # Live counter fed by _tick_recording between _set_state calls
             text = template.format(self._recorder.recording_duration, hotkey)
@@ -525,6 +528,7 @@ class App(tk.Tk):
     def _on_transcription_done(self, result, proc_secs: float = 0.0) -> None:
         """TRANSCRIBING → COPYING → STORING → DONE"""
         logger.info("_on_transcription_done called, text: %s", result.text[:50] if result.text else "(empty)")
+        self._model_asleep = False  # transcribing reloads the model if needed
         self._session_count += 1
         dur = result.duration
         self._last_audio_secs = dur
@@ -735,8 +739,8 @@ class App(tk.Tk):
         except Exception:
             pass
 
-    def _flash(self, msg: str) -> None:
-        """Show a temporary message in the status bar (2.5 s).
+    def _flash(self, msg: str, duration_ms: int = 2_500) -> None:
+        """Show a temporary message in the status bar (2.5 s by default).
 
         Only one restore timer is ever pending: a new flash cancels the
         previous restore, otherwise stacked restores repaint stale states.
@@ -749,7 +753,7 @@ class App(tk.Tk):
             except Exception:
                 pass
         self._flash_restore_id = self.after(
-            2_500, lambda: self._set_state(self._state)
+            duration_ms, lambda: self._set_state(self._state)
         )
 
     # ── Idle model unload (frees ~1.5 GB of RAM) ─────────────────────────
@@ -772,6 +776,11 @@ class App(tk.Tk):
                 pass
             self._unload_timer_id = None
 
+    def _mark_model_awake(self) -> None:
+        """Model is loaded in RAM again (idle status suffix disappears)."""
+        self._model_asleep = False
+        self._set_state(self._state)
+
     def _unload_model_now(self) -> None:
         """Free the model from RAM after N idle minutes (config.MODEL_UNLOAD_MIN)."""
         self._unload_timer_id = None
@@ -786,11 +795,18 @@ class App(tk.Tk):
             self._schedule_model_unload()
             return
         self._transcriber.unload()
+        self._model_asleep = True
         logger.info(
             "Model unloaded after %d idle minute(s) (~1.5 GB RAM freed)",
             config.MODEL_UNLOAD_MIN,
         )
-        self._flash("🛌  Modelo en reposo — se recarga al dictar (~3 s)")
+        self._log_status(
+            "🛌  Modelo en reposo — se recarga automáticamente al dictar (~3 s)"
+        )
+        self._flash(
+            "🛌  Modelo en reposo — se recarga al dictar (~3 s)",
+            duration_ms=5_000,
+        )
 
     def _on_close(self) -> None:
         """Close button → stop recording if active and exit."""
@@ -878,6 +894,7 @@ class App(tk.Tk):
                 return
             self._safe_after(self._hide_progress)
             self._safe_after(self._flash_status, "Modelo listo", "#4ec9b0")
+            self._safe_after(self._mark_model_awake)
             self._safe_after(self._set_state, self._state, delay_ms=2_000)
             self._safe_after(self._schedule_model_unload)
 

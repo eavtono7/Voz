@@ -417,6 +417,73 @@ class TestModelUnload:
             assert app._pending_hotkey is False
         # destroy already done by _on_close
 
+    def test_idle_status_shows_asleep_suffix(self) -> None:
+        from unittest import mock
+
+        app = self._make_app()
+        try:
+            with mock.patch.object(
+                type(app._transcriber),
+                "is_model_loaded",
+                new_callable=mock.PropertyMock,
+                return_value=False,
+            ):
+                app._model_asleep = True
+                app._set_state("idle")
+                assert "reposo" in app._status_lbl.cget("text")
+
+            with mock.patch.object(
+                type(app._transcriber),
+                "is_model_loaded",
+                new_callable=mock.PropertyMock,
+                return_value=True,
+            ):
+                app._mark_model_awake()
+                assert "reposo" not in app._status_lbl.cget("text")
+                assert app._model_asleep is False
+        finally:
+            app.destroy()
+
+    def test_unload_now_logs_and_marks_asleep(self) -> None:
+        import core.config as config
+        from unittest import mock
+
+        app = self._make_app()
+        try:
+            with mock.patch.object(config, "MODEL_UNLOAD_MIN", 10), \
+                 mock.patch.object(
+                     type(app._transcriber),
+                     "is_model_loaded",
+                     new_callable=mock.PropertyMock,
+                     return_value=True,
+                 ), \
+                 mock.patch.object(type(app._transcriber), "unload"):
+                app._unload_model_now()
+            assert app._model_asleep is True
+            widget = app._text.get("1.0", "end-1c")
+            assert "Modelo en reposo" in widget
+        finally:
+            app.destroy()
+
+    def test_done_clears_asleep_flag(self) -> None:
+        import types
+
+        import core.config as config
+        from unittest import mock
+
+        app = self._make_app()
+        try:
+            app._model_asleep = True
+            with mock.patch.object(config, "AUTO_COPY", False), \
+                 mock.patch.object(config, "AUTO_SAVE", False):
+                result = types.SimpleNamespace(
+                    text="hola", duration=1.0, language="es"
+                )
+                app._on_transcription_done(result, 0.5)
+            assert app._model_asleep is False
+        finally:
+            app.destroy()
+
 
 class TestTranscriberModel:
     def test_is_model_cached_does_not_crash(self) -> None:
