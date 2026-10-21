@@ -85,5 +85,22 @@ if (Test-Path $nested) {
 #    ~1.5 GB duplicate of the live cache in dist\voz\models\.
 if (Test-Path $backup) { Remove-Item $backup -Recurse -Force }
 
+# 6) Auditability: surface any build warnings about excluded modules
+#    (a real importer appearing here means the exclusion must be reverted),
+#    then drop the PyInstaller work dir (regenerated on every build,
+#    ~70 MB saved).
+$warn = Join-Path "build\voz" "warn-voz.txt"
+if (Test-Path $warn) {
+    $pandasWarn = Select-String -Path $warn -Pattern "pandas" -SimpleMatch | Select-Object -First 2
+    if ($pandasWarn) {
+        Write-Host "WARNING: excluded 'pandas' is referenced by the build:" -ForegroundColor Yellow
+        foreach ($w in $pandasWarn) { Write-Host "  $($w.Line)" -ForegroundColor Yellow }
+        Write-Host "-> revierte el excludes de pandas en build.spec si esto persiste." -ForegroundColor Yellow
+    } else {
+        Write-Host "pandas exclusion clean (no build warnings)." -ForegroundColor Green
+    }
+}
+if (Test-Path "build") { Remove-Item "build" -Recurse -Force -ErrorAction SilentlyContinue }
+
 Write-Host ""
 Write-Host "OK: dist\voz\voz.exe rebuilt (config/data/models preserved)." -ForegroundColor Green

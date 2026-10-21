@@ -22,6 +22,7 @@ _DEFAULTS = {
     "AUTO_COPY": True,
     "AUTO_SAVE": True,
     "MICROPHONE_DEVICE": None,
+    "MODEL_UNLOAD_MIN": 10,
 }
 
 
@@ -252,6 +253,7 @@ class TestUpdateTypeGuard:
             config.AUTO_COPY,
             config.AUTO_SAVE,
             config.MICROPHONE_DEVICE,
+            config.MODEL_UNLOAD_MIN,
         )
         config.update(
             MODEL=None,
@@ -261,6 +263,7 @@ class TestUpdateTypeGuard:
             AUTO_COPY=1,
             AUTO_SAVE="yes",
             MICROPHONE_DEVICE="1",
+            MODEL_UNLOAD_MIN="never",
         )
         after = (
             config.MODEL,
@@ -270,6 +273,7 @@ class TestUpdateTypeGuard:
             config.AUTO_COPY,
             config.AUTO_SAVE,
             config.MICROPHONE_DEVICE,
+            config.MODEL_UNLOAD_MIN,
         )
         assert before == after
 
@@ -279,3 +283,57 @@ class TestUpdateTypeGuard:
         assert config.MICROPHONE_DEVICE == 0
         assert config.SAMPLE_RATE == 48000
         assert config.AUTO_COPY is False
+
+
+class TestModelUnloadMin:
+    def test_default_is_10(self, isolated: None) -> None:
+        config.init()
+        assert config.MODEL_UNLOAD_MIN == 10
+
+    def test_zero_disables_feature(self, isolated: None, tmp_path: Path) -> None:
+        tmp_path.joinpath("config.json").write_text(
+            json.dumps({"model_unload_min": 0}), encoding="utf-8"
+        )
+        config.init()
+        assert config.MODEL_UNLOAD_MIN == 0
+
+    def test_negative_rejected(self, isolated: None, tmp_path: Path) -> None:
+        tmp_path.joinpath("config.json").write_text(
+            json.dumps({"model_unload_min": -5}), encoding="utf-8"
+        )
+        config.init()
+        assert config.MODEL_UNLOAD_MIN == 10
+
+    def test_string_rejected(self, isolated: None, tmp_path: Path) -> None:
+        tmp_path.joinpath("config.json").write_text(
+            json.dumps({"model_unload_min": "30"}), encoding="utf-8"
+        )
+        config.init()
+        assert config.MODEL_UNLOAD_MIN == 10
+
+    def test_bool_rejected(self, isolated: None, tmp_path: Path) -> None:
+        tmp_path.joinpath("config.json").write_text(
+            json.dumps({"model_unload_min": True}), encoding="utf-8"
+        )
+        config.init()
+        assert config.MODEL_UNLOAD_MIN == 10
+
+    def test_beyond_one_day_rejected(self, isolated: None, tmp_path: Path) -> None:
+        tmp_path.joinpath("config.json").write_text(
+            json.dumps({"model_unload_min": 1441}), encoding="utf-8"
+        )
+        config.init()
+        assert config.MODEL_UNLOAD_MIN == 10
+
+    def test_valid_value_loaded_and_persisted(
+        self, isolated: None, tmp_path: Path
+    ) -> None:
+        tmp_path.joinpath("config.json").write_text(
+            json.dumps({"model_unload_min": 30}), encoding="utf-8"
+        )
+        config.init()
+        assert config.MODEL_UNLOAD_MIN == 30
+        config.MODEL_UNLOAD_MIN = 20
+        config.save()
+        raw = json.loads(config.CONFIG_PATH.read_text(encoding="utf-8"))
+        assert raw["model_unload_min"] == 20

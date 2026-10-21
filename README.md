@@ -89,8 +89,9 @@ voz/
 |---|---|
 | **Separación de capas** | `core/` = lógica pura (no sabe de GUI), `gui/` = interfaz (no sabe de micrófono) |
 | **State machine** | Estados: `idle → recording → transcribing → copying → storing → done → idle` |
-| **Thread safety** | Transcripción en hilo separado, comunicación con GUI via `event_generate` |
+| **Thread safety** | Transcripción en hilo separado; los hilos de fondo publican en una `queue.Queue` y un poller de Tk la consume (50 ms) |
 | **Precarga del modelo** | Whisper se carga en background al iniciar para que la primera transcripción sea instantánea |
+| **Descarga en reposo** | Tras `model_unload_min` minutos de inactividad el modelo se libera de RAM (~1.5 GB); se recarga en ~3 s al dictar de nuevo. `0` lo desactiva |
 | **Config centralizada** | Todos los valores mágicos en `core/config.py` |
 
 ## 🧠 Tecnologías

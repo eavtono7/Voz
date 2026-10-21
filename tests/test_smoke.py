@@ -131,12 +131,46 @@ class TestHotkeyStateMachine:
         finally:
             app.destroy()
 
-    def test_hotkey_ignored_while_transcribing(self) -> None:
+    def test_hotkey_during_transcribing_buffers(self) -> None:
         app = self._make_app()
         try:
-            app._set_state("transcribing")
-            app._handle_hotkey()
-            assert app._state == "transcribing"  # dropped, no crash
+            from unittest import mock
+
+            with mock.patch.object(type(app._recorder), "start") as rec_start:
+                app._set_state("transcribing")
+                app._handle_hotkey()
+                # Press is registered, not dropped, and recording does NOT
+                # start mid-transcription.
+                assert app._pending_hotkey is True
+                assert app._state == "transcribing"
+                rec_start.assert_not_called()
+        finally:
+            app.destroy()
+
+    def test_buffered_hotkey_starts_recording_on_return_to_idle(self) -> None:
+        from unittest import mock
+
+        app = self._make_app()
+        try:
+            with mock.patch.object(type(app._recorder), "start") as rec_start:
+                app._set_state("transcribing")
+                app._handle_hotkey()
+                app._return_to_idle()
+                assert app._pending_hotkey is False
+                assert app._state == "recording"
+                rec_start.assert_called_once()
+        finally:
+            app.destroy()
+
+    def test_error_state_hotkey_starts_new_dictation(self) -> None:
+        from unittest import mock
+
+        app = self._make_app()
+        try:
+            with mock.patch.object(type(app._recorder), "start"):
+                app._set_state("error", "boom")
+                app._handle_hotkey()
+                assert app._state == "recording"
         finally:
             app.destroy()
 
@@ -280,6 +314,107 @@ class TestFeedback:
             app._on_close()
             assert tick_id in cancelled
             assert flash_id in cancelled
+        # destroy already done by _on_close
+
+
+class TestModelUnload:
+    """Idle TTL: the loaded model is freed from RAM when config allows."""
+
+    def _make_app(self):
+        return TestStateMachine._make_app(self)
+
+    def test_schedule_when_enabled_and_loaded(self) -> None:
+        import core.config as config
+        from unittest import mock
+
+        app = self._make_app()
+        try:
+            with mock.patch.object(config, "MODEL_UNLOAD_MIN", 10), \
+                 mock.patch.object(
+                     type(app._transcriber),
+                     "is_model_loaded",
+                     new_callable=mock.PropertyMock,
+                     return_value=True,
+                 ):
+                app._schedule_model_unload()
+                assert app._unload_timer_id is not None
+        finally:
+            app.destroy()
+
+    def test_no_schedule_when_disabled(self) -> None:
+        import types
+
+        import core.config as config
+        from unittest import mock
+
+        app = self._make_app()
+        try:
+            with mock.patch.object(config, "MODEL_UNLOAD_MIN", 0):
+                app._schedule_model_unload()
+                assert app._unload_timer_id is None
+        finally:
+            app.destroy()
+
+    def test_unload_now_frees_model(self) -> None:
+        import core.config as config
+        from unittest import mock
+
+        app = self._make_app()
+        try:
+            with mock.patch.object(config, "MODEL_UNLOAD_MIN", 10), \
+                 mock.patch.object(
+                     type(app._transcriber),
+                     "is_model_loaded",
+                     new_callable=mock.PropertyMock,
+                     return_value=True,
+                 ), \
+                 mock.patch.object(type(app._transcriber), "unload") as unload:
+                app._schedule_model_unload()  # arms the idle timer
+                assert app._unload_timer_id is not None
+                app._unload_model_now()
+                unload.assert_called_once()
+            assert app._unload_timer_id is None
+            assert app._state == "idle"
+        finally:
+            app.destroy()
+
+    def test_recording_cancels_pending_unload(self) -> None:
+        import core.config as config
+        from unittest import mock
+
+        app = self._make_app()
+        try:
+            with mock.patch.object(config, "MODEL_UNLOAD_MIN", 10), \
+                 mock.patch.object(
+                     type(app._transcriber),
+                     "is_model_loaded",
+                     new_callable=mock.PropertyMock,
+                     return_value=True,
+                 ):
+                app._schedule_model_unload()
+                timer_id = app._unload_timer_id
+                assert timer_id is not None
+                with mock.patch.object(type(app._recorder), "start"):
+                    app._start_recording()
+                assert app._unload_timer_id is None
+        finally:
+            app.destroy()
+
+    def test_close_cancels_unload_timer(self) -> None:
+        import types
+        from unittest import mock
+
+        app = self._make_app()
+        cancelled: list = []
+        with mock.patch.object(app, "after_cancel", side_effect=lambda i: cancelled.append(i)):
+            app._unload_timer_id = app.after(60_000, lambda: None)
+            unload_id = app._unload_timer_id
+            app._transcription_thread = types.SimpleNamespace(
+                is_alive=lambda: False, join=lambda timeout=None: None
+            )
+            app._on_close()
+            assert unload_id in cancelled
+            assert app._pending_hotkey is False
         # destroy already done by _on_close
 
 

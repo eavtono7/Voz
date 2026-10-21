@@ -49,6 +49,9 @@ a = Analysis(
         "pip",
         "idlelib",
         "turtle",
+        # Not imported anywhere in the project nor by faster-whisper:
+        # PyInstaller hooks would still drag in ~17 MB of dead weight.
+        "pandas",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

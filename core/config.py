@@ -36,11 +36,13 @@ HOTKEY: str = "F10"
 AUTO_COPY: bool = True
 AUTO_SAVE: bool = True
 MICROPHONE_DEVICE: Optional[int] = None  # None = system default
+MODEL_UNLOAD_MIN: int = 10  # Free model RAM after N idle minutes (0 = never)
 
 # ── Whitelist of valid config keys ─────────────────────────────────────────────
 _CONFIG_KEYS = {
     "MODEL", "DEVICE", "COMPUTE_TYPE", "LANGUAGE", "SAMPLE_RATE",
     "CHANNELS", "HOTKEY", "AUTO_COPY", "AUTO_SAVE", "MICROPHONE_DEVICE",
+    "MODEL_UNLOAD_MIN",
 }
 
 # Keys accepted by the global hotkey listener (pynput keyboard.Key names).
@@ -71,7 +73,7 @@ def init() -> None:
     global BASE_DIR, MODEL_DIR, OUTPUT_DIR, DICTATIONS_DIR, CONFIG_PATH, LOG_PATH
     global MODEL, DEVICE, COMPUTE_TYPE, LANGUAGE, HOTKEY
     global AUTO_COPY, AUTO_SAVE, MICROPHONE_DEVICE
-    global SAMPLE_RATE, CHANNELS
+    global SAMPLE_RATE, CHANNELS, MODEL_UNLOAD_MIN
 
     # ── Detect environment ────────────────────────────────────────────────
     if getattr(sys, "frozen", False):
@@ -119,6 +121,9 @@ def init() -> None:
             )
             SAMPLE_RATE = _validate_positive_int(data.get("sample_rate"), "sample_rate", SAMPLE_RATE)
             CHANNELS = _validate_positive_int(data.get("channels"), "channels", CHANNELS)
+            MODEL_UNLOAD_MIN = _validate_idle_min(
+                data.get("model_unload_min"), MODEL_UNLOAD_MIN
+            )
             logger.info("Config loaded from %s", CONFIG_PATH)
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Failed to load config (%s); using defaults", exc)
@@ -128,7 +133,7 @@ def init() -> None:
 
 def save() -> bool:
     """Persist current configuration values to config.json.
-    
+
     Returns True on success, False on failure (already logged).
     """
     data = {
@@ -142,6 +147,7 @@ def save() -> bool:
         "microphone_device": MICROPHONE_DEVICE,
         "sample_rate": SAMPLE_RATE,
         "channels": CHANNELS,
+        "model_unload_min": MODEL_UNLOAD_MIN,
     }
     try:
         CONFIG_PATH.write_text(
@@ -185,6 +191,10 @@ def _type_ok(key: str, value: object) -> bool:
         if isinstance(value, bool):  # bool is a subclass of int – reject
             return False
         return value is None or (isinstance(value, int) and value >= 0)
+    if key == "MODEL_UNLOAD_MIN":
+        if isinstance(value, bool):
+            return False
+        return isinstance(value, int) and 0 <= value <= 1440
     return False
 
 
@@ -198,9 +208,23 @@ def _validate_str(value: object, name: str, default: str) -> str:
 
 def _validate_positive_int(value: object, name: str, default: int) -> int:
     """Return *value* if it is a positive integer, otherwise *default*."""
-    if isinstance(value, int) and value > 0:
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
     logger.warning("Invalid config value for '%s' (%r), using default: %d", name, value, default)
+    return default
+
+
+def _validate_idle_min(value: object, default: int) -> int:
+    """Validate the model-unload idle timeout (minutes).
+
+    Accepts 0 (feature disabled) up to 1440 (1 day).
+    """
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 1440:
+        return value
+    logger.warning(
+        "Invalid config value for 'model_unload_min' (%r), using default: %d",
+        value, default,
+    )
     return default
 
 

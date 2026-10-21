@@ -141,15 +141,26 @@ class _FakeWhisperModel:
 
 
 class TestLocalSnapshotLoading:
-    """Regression: cached models must load from disk, never via HF network."""
+    """Regression: cached models must load from disk, never via HF network.
+
+    The cache guard must also match repo id: a cached model is only used
+    when it is the one currently configured.
+    """
+
+    def _fake_cache(self, tmp_path: Any) -> Any:
+        snapshot = tmp_path / "models--fake--model" / "snapshots" / "abc123"
+        snapshot.mkdir(parents=True)
+        (snapshot / "model.bin").write_bytes(b"x")
+        return snapshot
 
     def test_cached_snapshot_path_found(
         self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        snapshot = tmp_path / "models--fake--model" / "snapshots" / "abc123"
-        snapshot.mkdir(parents=True)
-        (snapshot / "model.bin").write_bytes(b"x")
+        snapshot = self._fake_cache(tmp_path)
         monkeypatch.setattr(config, "MODEL_DIR", tmp_path)
+        monkeypatch.setattr(
+            Transcriber, "_expected_repo_id", staticmethod(lambda: "fake/model")
+        )
 
         t = Transcriber()
         assert t._cached_snapshot_path() == snapshot
@@ -167,16 +178,31 @@ class TestLocalSnapshotLoading:
         self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(config, "MODEL_DIR", tmp_path)
+        monkeypatch.setattr(
+            Transcriber, "_expected_repo_id", staticmethod(lambda: "fake/model")
+        )
+        assert Transcriber()._cached_snapshot_path() is None
+
+    def test_mismatched_cached_model_not_adopted(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cached model for a DIFFERENT repo id must never be loaded."""
+        self._fake_cache(tmp_path)
+        monkeypatch.setattr(config, "MODEL_DIR", tmp_path)
+        monkeypatch.setattr(
+            Transcriber, "_expected_repo_id", staticmethod(lambda: "other/model")
+        )
         assert Transcriber()._cached_snapshot_path() is None
 
     def test_load_uses_local_path_when_cached(
         self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Offline-safe: the snapshot dir is passed instead of the repo id."""
-        snapshot = tmp_path / "models--fake--model" / "snapshots" / "abc123"
-        snapshot.mkdir(parents=True)
-        (snapshot / "model.bin").write_bytes(b"x")
+        snapshot = self._fake_cache(tmp_path)
         monkeypatch.setattr(config, "MODEL_DIR", tmp_path)
+        monkeypatch.setattr(
+            Transcriber, "_expected_repo_id", staticmethod(lambda: "fake/model")
+        )
         monkeypatch.setattr("faster_whisper.WhisperModel", _FakeWhisperModel)
 
         t = Transcriber()
@@ -188,7 +214,6 @@ class TestLocalSnapshotLoading:
     def test_load_uses_repo_name_when_not_cached(
         self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        config.MODEL_DIR.mkdir(parents=True, exist_ok=True)
         monkeypatch.setattr(config, "MODEL_DIR", tmp_path)
         monkeypatch.setattr("faster_whisper.WhisperModel", _FakeWhisperModel)
 
@@ -196,3 +221,16 @@ class TestLocalSnapshotLoading:
         t._load_model()
 
         assert _FakeWhisperModel.last_root == t.model_name
+
+    def test_expected_repo_id_resolves_alias(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(config, "MODEL", "turbo")
+        repo = Transcriber._expected_repo_id()
+        assert repo is not None and "turbo" in repo
+
+    def test_expected_repo_id_passthrough_repo(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(config, "MODEL", "org/other-model")
+        assert Transcriber._expected_repo_id() == "org/other-model"

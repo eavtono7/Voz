@@ -101,6 +101,8 @@ class App(tk.Tk):
         # ── Timers / deferred work ───────────────────────────────────────
         self._return_to_idle_id: str | None = None
         self._pending_settings: bool = False
+        self._pending_hotkey: bool = False  # hotkey pressed mid-transcription
+        self._unload_timer_id: str | None = None
 
         # ── Build UI ─────────────────────────────────────────────────────
         logger.debug("Building UI...")
@@ -303,6 +305,11 @@ class App(tk.Tk):
             self._start_recording()
         elif self._state == "recording":
             self._stop_and_transcribe()
+        elif self._state == "transcribing":
+            # Buffer the press instead of dropping it: the new dictation
+            # starts as soon as the current cycle returns to idle.
+            self._pending_hotkey = True
+            self._flash("⏳  En cola — iniciará al terminar la actual")
         elif self._state == "done":
             # A press during the brief "done" window must not be lost:
             # cancel the pending idle transition and record immediately.
@@ -312,6 +319,10 @@ class App(tk.Tk):
                 except Exception:
                     pass
                 self._return_to_idle_id = None
+            self._start_recording()
+        elif self._state == "error":
+            # Next press after an error starts a fresh dictation attempt.
+            self._log_status("🔄  Reintentando...")
             self._start_recording()
 
     # ═══════════════════════════════════════════════════════════════════════
@@ -419,6 +430,7 @@ class App(tk.Tk):
     def _start_recording(self) -> None:
         """IDLE → RECORDING"""
         logger.info("_start_recording called")
+        self._cancel_model_unload()  # user is active again
         try:
             logger.debug("Calling recorder.start()")
             self._recorder.start()
@@ -567,6 +579,11 @@ class App(tk.Tk):
         if self._pending_settings:
             self._pending_settings = False
             self._on_settings_saved()
+        if self._pending_hotkey:
+            self._pending_hotkey = False
+            self._start_recording()
+            return
+        self._schedule_model_unload()
 
     def _show_transcribing_duration(self, audio_secs: float) -> None:
         """Show how much recorded audio is being processed (Tk thread only)."""
@@ -586,6 +603,11 @@ class App(tk.Tk):
         if self._pending_settings:
             self._pending_settings = False
             self._on_settings_saved()
+        if self._pending_hotkey:
+            self._pending_hotkey = False
+            self._start_recording()
+            return
+        self._schedule_model_unload()
 
     def _log_status(self, msg: str) -> None:
         """Write a status message to the text area."""
@@ -730,10 +752,52 @@ class App(tk.Tk):
             2_500, lambda: self._set_state(self._state)
         )
 
+    # ── Idle model unload (frees ~1.5 GB of RAM) ─────────────────────────
+
+    def _schedule_model_unload(self) -> None:
+        """Arm the idle-unload timer after a finished cycle (or pre-load)."""
+        self._cancel_model_unload()
+        minutes = config.MODEL_UNLOAD_MIN
+        if minutes <= 0 or not self._transcriber.is_model_loaded:
+            return
+        self._unload_timer_id = self.after(
+            minutes * 60_000, self._unload_model_now
+        )
+
+    def _cancel_model_unload(self) -> None:
+        if self._unload_timer_id is not None:
+            try:
+                self.after_cancel(self._unload_timer_id)
+            except Exception:
+                pass
+            self._unload_timer_id = None
+
+    def _unload_model_now(self) -> None:
+        """Free the model from RAM after N idle minutes (config.MODEL_UNLOAD_MIN)."""
+        self._unload_timer_id = None
+        if self._state != "idle" or not self._transcriber.is_model_loaded:
+            return
+        busy = (
+            self._transcription_thread is not None
+            and self._transcription_thread.is_alive()
+        )
+        if busy:
+            logger.info("Unload timer fired during transcription – rearming")
+            self._schedule_model_unload()
+            return
+        self._transcriber.unload()
+        logger.info(
+            "Model unloaded after %d idle minute(s) (~1.5 GB RAM freed)",
+            config.MODEL_UNLOAD_MIN,
+        )
+        self._flash("🛌  Modelo en reposo — se recarga al dictar (~3 s)")
+
     def _on_close(self) -> None:
         """Close button → stop recording if active and exit."""
         self._running = False
+        self._pending_hotkey = False
         self._cancel_recording_tick()
+        self._cancel_model_unload()
         if self._flash_restore_id is not None:
             try:
                 self.after_cancel(self._flash_restore_id)
@@ -742,10 +806,16 @@ class App(tk.Tk):
             self._flash_restore_id = None
 
         if self._state == "recording":
-            try:
-                self._recorder.stop()
-            except Exception:
-                pass
+            # Teardown off the UI thread: stop() may take a while on long
+            # dictations (buffer concat + resample). Daemon thread dies with
+            # the process if it does not finish in time.
+            def _drain_recorder() -> None:
+                try:
+                    self._recorder.stop()
+                except Exception:
+                    logger.debug("Recorder stop during close failed", exc_info=True)
+
+            threading.Thread(target=_drain_recorder, daemon=True).start()
 
         # Never block the close on a long transcription: the thread is a
         # daemon and its after() callbacks tolerate a destroyed window.
@@ -791,16 +861,25 @@ class App(tk.Tk):
         else:
             self._show_progress("Descargando modelo (~1.5 GB)...")
 
+        # Capture the instance this preload belongs to: swapping Transcriber
+        # via settings mid-load must not confuse the completion callbacks.
+        transcriber = self._transcriber
+
         def _load() -> None:
             try:
-                self._transcriber.preload()
+                transcriber.preload()
             except Exception as exc:
                 logger.warning("Model preload failed (will retry on dictation): %s", exc)
+                self._safe_after(self._hide_progress)
+                return
+            if transcriber is not self._transcriber:
+                logger.debug("Preload finished after a Transcriber swap – feedback skipped")
                 self._safe_after(self._hide_progress)
                 return
             self._safe_after(self._hide_progress)
             self._safe_after(self._flash_status, "Modelo listo", "#4ec9b0")
             self._safe_after(self._set_state, self._state, delay_ms=2_000)
+            self._safe_after(self._schedule_model_unload)
 
         threading.Thread(target=_load, daemon=True).start()
 

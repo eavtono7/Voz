@@ -2,8 +2,7 @@
 faster-whisper>=1.0.0          # Speech-to-text engine
 numpy>=1.26.0                  # Audio array manipulation
 sounddevice>=0.5.0             # Microphone capture
-soundfile>=0.12.0              # Audio file I/O (wav, flac, ogg)
-av>=10.0.0                     # Audio file I/O (mp3, m4a)
+av>=10.0.0                     # Audio decoding (required by faster-whisper)
 scipy>=1.12.0                  # Audio resampling
 
 # ── GUI & UX ───────────────────────────────────────────────────────────────

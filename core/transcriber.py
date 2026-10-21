@@ -143,26 +143,54 @@ class Transcriber:
         """Check if the model files are already downloaded on disk.
 
         Works with any model by scanning for huggingface cache directories
-        or direct-download model files under MODEL_DIR.
+        or direct-download model files under MODEL_DIR — but only adopts a
+        cached copy when it matches the configured model (see
+        _expected_repo_id), never a different one.
         """
         return self._cached_snapshot_path() is not None
+
+    @staticmethod
+    def _expected_repo_id() -> Optional[str]:
+        """Resolve config.MODEL (alias like 'turbo' or an HF repo id) → repo id."""
+        name = (config.MODEL or "").strip()
+        if not name:
+            return None
+        try:
+            from faster_whisper.utils import _MODELS
+        except Exception:
+            return name
+        return _MODELS.get(name.lower(), name)
+
+    @staticmethod
+    def _candidate_repo_id(cache_dir_name: str) -> str:
+        """models--org--name → org/name (case preserved; lowercase on use)."""
+        return cache_dir_name[len("models--"):].replace("--", "/")
 
     def _cached_snapshot_path(self) -> Optional[Path]:
         """Return the local snapshot dir containing model.bin, or None.
 
         Used to load the model straight from disk, bypassing Hugging Face
         network calls entirely (works offline, no metadata probes).
+        Only returns a snapshot of the configured model.
         """
         model_dir = config.MODEL_DIR
+        expected = self._expected_repo_id()
+        if expected is None:
+            return None
+        expected_low = expected.lower()
 
         for candidate in model_dir.glob("models--*"):
-            if candidate.is_dir():
-                snaps = candidate / "snapshots"
-                if snaps.exists():
-                    for snap_dir in snaps.iterdir():
-                        if (snap_dir / "model.bin").is_file():
-                            return snap_dir
+            if not candidate.is_dir():
+                continue
+            if self._candidate_repo_id(candidate.name).lower() != expected_low:
+                continue
+            snaps = candidate / "snapshots"
+            if snaps.exists():
+                for snap_dir in snaps.iterdir():
+                    if (snap_dir / "model.bin").is_file():
+                        return snap_dir
 
+        # Explicit local model directory injected directly under MODEL_DIR.
         if (model_dir / "model.bin").is_file():
             return model_dir
         return None
