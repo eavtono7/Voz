@@ -44,18 +44,44 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-# 3) Restore runtime files into the fresh bundle
+# 3) Restore runtime files into the fresh bundle.
+#    robocopy /MIR is used instead of Copy-Item: if dist\voz\<name> somehow
+#    survived COLLECT (e.g. the app was running and held file locks),
+#    Copy-Item would nest the copy (models\models\...) while robocopy
+#    mirrors the backup deterministically and never nests.
 foreach ($name in @("config.json", "data", "models")) {
     $bak = Join-Path $backup $name
     if (Test-Path $bak) {
         Write-Host "Restoring $name -> $dist"
         $dst = Join-Path $dist $name
-        if (Test-Path $dst) { Remove-Item $dst -Recurse -Force }
-        Copy-Item $bak $dst -Recurse -Force
+        if ($name -eq "config.json") {
+            Copy-Item $bak $dst -Force
+        } else {
+            robocopy $bak $dst /MIR /R:2 /W:2 /NFL /NDL /NJH /NJS | Out-Null
+            if ($LASTEXITCODE -ge 8) {
+                Write-Host "robocopy failed for $name (exit $LASTEXITCODE)" -ForegroundColor Red
+                exit 1
+            }
+        }
     }
 }
 
-# 4) Drop the snapshot once restored. Keeping models\ here would be a
+# 4) Safety net: detect and fix a nested models\models left over when the
+#    app was running during the build (COLLECT could not wipe dist\voz).
+$nested = Join-Path $dist "models\models"
+if (Test-Path $nested) {
+    Write-Host "Detected nested models\models (app running during build?) - fixing..." -ForegroundColor Yellow
+    if (-not (Test-Path (Join-Path $dist "models\whisper"))) {
+        # Real cache lost: adopt the nested copy instead of re-downloading.
+        Move-Item $nested (Join-Path $dist "models\whisper")
+        Write-Host "Adopted nested model as dist\voz\models\whisper" -ForegroundColor Yellow
+    } else {
+        Remove-Item $nested -Recurse -Force
+        Write-Host "Removed nested duplicate model" -ForegroundColor Yellow
+    }
+}
+
+# 5) Drop the snapshot once restored. Keeping models\ here would be a
 #    ~1.5 GB duplicate of the live cache in dist\voz\models\.
 if (Test-Path $backup) { Remove-Item $backup -Recurse -Force }
 
