@@ -30,7 +30,7 @@ def _setup_logging() -> None:
     fh.setFormatter(fmt)
     root.addHandler(fh)
 
-    for noisy in ("urllib3", "huggingface_hub", "onnxruntime", "pynput", "PIL"):
+    for noisy in ("urllib3", "huggingface_hub", "onnxruntime", "pynput"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 

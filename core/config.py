@@ -8,7 +8,7 @@ Usage:
     from core import config
 
     print(config.MODEL)           # "turbo"
-    print(config.SAMPLE_RATE)     # 16000
+    print(config.HOTKEY)          # "F10"
 
 At startup, call config.init() to resolve paths and load config.json.
 """
@@ -30,20 +30,18 @@ MODEL: str = "turbo"
 DEVICE: str = "cpu"
 COMPUTE_TYPE: str = "int8"
 LANGUAGE: str = "es"
-SAMPLE_RATE: int = 16_000
-CHANNELS: int = 1
 HOTKEY: str = "F10"
 AUTO_COPY: bool = True
+AUTO_PASTE: bool = True  # Paste (Ctrl+V) into the focused app when done
 AUTO_SAVE: bool = True
+SOUNDS: bool = True  # Beep on record start / stop / done / error
 MICROPHONE_DEVICE: Optional[int] = None  # None = system default
 MODEL_UNLOAD_MIN: int = 10  # Free model RAM after N idle minutes (0 = never)
+BATCH_SIZE: int = 8  # Audio chunks transcribed in parallel (0 = one by one)
 
-# ── Whitelist of valid config keys ─────────────────────────────────────────────
-_CONFIG_KEYS = {
-    "MODEL", "DEVICE", "COMPUTE_TYPE", "LANGUAGE", "SAMPLE_RATE",
-    "CHANNELS", "HOTKEY", "AUTO_COPY", "AUTO_SAVE", "MICROPHONE_DEVICE",
-    "MODEL_UNLOAD_MIN",
-}
+# ── Fixed by Whisper (NOT configurable: the model only accepts 16 kHz mono) ──
+SAMPLE_RATE: int = 16_000
+CHANNELS: int = 1
 
 # Keys accepted by the global hotkey listener (pynput keyboard.Key names).
 _HOTKEY_ALLOWED = frozenset(
@@ -58,7 +56,6 @@ _HOTKEY_ALLOWED = frozenset(
 
 BASE_DIR: Path = Path(".")  # Project root or directory containing voz.exe
 MODEL_DIR: Path = Path(".")  # Where Whisper models are cached (outside .exe)
-OUTPUT_DIR: Path = Path(".")  # Batch transcription output
 DICTATIONS_DIR: Path = Path(".")  # Dictation session logs
 CONFIG_PATH: Path = Path(".")  # Path to config.json
 LOG_PATH: Path = Path(".")  # Path to voz.log
@@ -70,10 +67,10 @@ def init() -> None:
     Must be called once at startup, before any other module uses config values.
     Safe to call multiple times (idempotent after first call if paths don't change).
     """
-    global BASE_DIR, MODEL_DIR, OUTPUT_DIR, DICTATIONS_DIR, CONFIG_PATH, LOG_PATH
+    global BASE_DIR, MODEL_DIR, DICTATIONS_DIR, CONFIG_PATH, LOG_PATH
     global MODEL, DEVICE, COMPUTE_TYPE, LANGUAGE, HOTKEY
-    global AUTO_COPY, AUTO_SAVE, MICROPHONE_DEVICE
-    global SAMPLE_RATE, CHANNELS, MODEL_UNLOAD_MIN
+    global AUTO_COPY, AUTO_PASTE, AUTO_SAVE, SOUNDS, MICROPHONE_DEVICE
+    global MODEL_UNLOAD_MIN, BATCH_SIZE
 
     # ── Detect environment ────────────────────────────────────────────────
     if getattr(sys, "frozen", False):
@@ -93,14 +90,12 @@ def init() -> None:
         # no matter which entry point is used. Keeps the app self-contained:
         # everything lives inside dist/voz.
         MODEL_DIR = BASE_DIR / "dist" / "voz" / "models" / "whisper"
-    OUTPUT_DIR = BASE_DIR / "data" / "output"
     DICTATIONS_DIR = BASE_DIR / "data" / "dictations"
     CONFIG_PATH = BASE_DIR / "config.json"
     LOG_PATH = BASE_DIR / "data" / "voz.log"
 
     # ── Ensure directories exist ──────────────────────────────────────────
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     DICTATIONS_DIR.mkdir(parents=True, exist_ok=True)
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -115,14 +110,19 @@ def init() -> None:
             LANGUAGE = _validate_language(data.get("language"), LANGUAGE)
             HOTKEY = _validate_hotkey(data.get("hotkey"), HOTKEY)
             AUTO_COPY = bool(data.get("auto_copy", AUTO_COPY))
+            AUTO_PASTE = bool(data.get("auto_paste", AUTO_PASTE))
             AUTO_SAVE = bool(data.get("auto_save", AUTO_SAVE))
+            SOUNDS = bool(data.get("sounds", SOUNDS))
             MICROPHONE_DEVICE = _validate_mic_device(
                 data.get("microphone_device"), MICROPHONE_DEVICE
             )
-            SAMPLE_RATE = _validate_positive_int(data.get("sample_rate"), "sample_rate", SAMPLE_RATE)
-            CHANNELS = _validate_positive_int(data.get("channels"), "channels", CHANNELS)
-            MODEL_UNLOAD_MIN = _validate_idle_min(
-                data.get("model_unload_min"), MODEL_UNLOAD_MIN
+            # 0 disables the feature, 1440 min = 1 day.
+            MODEL_UNLOAD_MIN = _validate_int_range(
+                data.get("model_unload_min"), "model_unload_min", MODEL_UNLOAD_MIN, 0, 1440
+            )
+            # 0 = classic one-chunk-at-a-time transcription.
+            BATCH_SIZE = _validate_int_range(
+                data.get("batch_size"), "batch_size", BATCH_SIZE, 0, 64
             )
             logger.info("Config loaded from %s", CONFIG_PATH)
         except (json.JSONDecodeError, OSError) as exc:
@@ -143,11 +143,12 @@ def save() -> bool:
         "language": LANGUAGE,
         "hotkey": HOTKEY,
         "auto_copy": AUTO_COPY,
+        "auto_paste": AUTO_PASTE,
         "auto_save": AUTO_SAVE,
+        "sounds": SOUNDS,
         "microphone_device": MICROPHONE_DEVICE,
-        "sample_rate": SAMPLE_RATE,
-        "channels": CHANNELS,
         "model_unload_min": MODEL_UNLOAD_MIN,
+        "batch_size": BATCH_SIZE,
     }
     try:
         CONFIG_PATH.write_text(
@@ -161,43 +162,6 @@ def save() -> bool:
         return False
 
 
-def update(**kwargs) -> None:
-    """Update config values at runtime without touching disk.
-
-    Call save() afterwards if you want to persist.
-    Only keys in the _CONFIG_KEYS whitelist are accepted, and the value
-    must type-check (no silent corruption from bad types at runtime).
-    """
-    for key, value in kwargs.items():
-        if key not in _CONFIG_KEYS:
-            logger.warning("Unknown config key (ignored): %s", key)
-            continue
-        if not _type_ok(key, value):
-            logger.warning("Invalid type for config key %s (%r); ignored", key, value)
-            continue
-        globals()[key] = value
-        logger.debug("Config updated: %s = %r", key, value)
-
-
-def _type_ok(key: str, value: object) -> bool:
-    """Simple runtime type guard for config.update()."""
-    if key in ("MODEL", "DEVICE", "COMPUTE_TYPE", "LANGUAGE", "HOTKEY"):
-        return isinstance(value, str) and bool(value.strip())
-    if key in ("SAMPLE_RATE", "CHANNELS"):
-        return isinstance(value, int) and not isinstance(value, bool) and value > 0
-    if key in ("AUTO_COPY", "AUTO_SAVE"):
-        return isinstance(value, bool)
-    if key == "MICROPHONE_DEVICE":
-        if isinstance(value, bool):  # bool is a subclass of int – reject
-            return False
-        return value is None or (isinstance(value, int) and value >= 0)
-    if key == "MODEL_UNLOAD_MIN":
-        if isinstance(value, bool):
-            return False
-        return isinstance(value, int) and 0 <= value <= 1440
-    return False
-
-
 def _validate_str(value: object, name: str, default: str) -> str:
     """Return *value* if it is a non-empty string, otherwise *default*."""
     if isinstance(value, str) and value.strip():
@@ -206,25 +170,20 @@ def _validate_str(value: object, name: str, default: str) -> str:
     return default
 
 
-def _validate_positive_int(value: object, name: str, default: int) -> int:
-    """Return *value* if it is a positive integer, otherwise *default*."""
-    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-        return value
-    logger.warning("Invalid config value for '%s' (%r), using default: %d", name, value, default)
-    return default
+def _validate_int_range(
+    value: object, name: str, default: int, low: int, high: int
+) -> int:
+    """Return *value* if it is an int within [low, high], otherwise *default*.
 
-
-def _validate_idle_min(value: object, default: int) -> int:
-    """Validate the model-unload idle timeout (minutes).
-
-    Accepts 0 (feature disabled) up to 1440 (1 day).
+    A missing key (None) silently keeps the default; bool is rejected even
+    though it is a subclass of int.
     """
-    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 1440:
+    if isinstance(value, int) and not isinstance(value, bool) and low <= value <= high:
         return value
-    logger.warning(
-        "Invalid config value for 'model_unload_min' (%r), using default: %d",
-        value, default,
-    )
+    if value is not None:
+        logger.warning(
+            "Invalid config value for '%s' (%r), using default: %d", name, value, default
+        )
     return default
 
 

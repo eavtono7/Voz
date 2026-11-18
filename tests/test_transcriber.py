@@ -54,6 +54,7 @@ def _make_faked_instance(
     t._model = types.SimpleNamespace(transcribe=fake_transcribe)  # type: ignore[assignment]
     monkeypatch.setattr(Transcriber, "_load_model", lambda self: None)
     monkeypatch.setattr(config, "LANGUAGE", "es")
+    monkeypatch.setattr(config, "BATCH_SIZE", 0)  # classic path by default
     return t
 
 
@@ -110,6 +111,66 @@ class TestTranscribeResult:
         assert result.model == t.model_name
 
 
+class TestBatchedMode:
+    """BATCH_SIZE > 1 routes through faster-whisper's batched pipeline."""
+
+    def test_batch_size_uses_batched_pipeline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        classic: Dict[str, Any] = {}
+        batched: Dict[str, Any] = {}
+        t = _make_faked_instance(monkeypatch, classic)
+        monkeypatch.setattr(config, "BATCH_SIZE", 8)
+
+        class FakePipeline:
+            def __init__(self, model: Any) -> None:
+                batched["model"] = model
+
+            def transcribe(self, audio: np.ndarray, **kwargs: Any):
+                batched.update(kwargs)
+                return (
+                    iter([_FakeSegment(0.0, 1.0, "por lotes")]),
+                    types.SimpleNamespace(language="es"),
+                )
+
+        monkeypatch.setattr("faster_whisper.BatchedInferencePipeline", FakePipeline)
+
+        result = t.transcribe(np.zeros(16000, dtype=np.float32))
+
+        assert result.text == "por lotes"
+        assert batched["model"] is t._model
+        assert batched["batch_size"] == 8
+        # Regression: the batched default drops punctuation and capitals.
+        assert batched["without_timestamps"] is False
+        assert batched["language"] == "es"
+        assert batched["vad_filter"] is True
+        assert classic == {}, "classic transcribe must not run in batched mode"
+
+    def test_batch_size_zero_uses_classic_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: Dict[str, Any] = {}
+        t = _make_faked_instance(monkeypatch, calls)
+
+        result = t.transcribe(np.zeros(16000, dtype=np.float32))
+
+        assert result.text == "hola mundo"
+        assert "batch_size" not in calls
+
+
+class TestCpuThreads:
+    @pytest.mark.parametrize(
+        "logical,expected", [(None, 4), (2, 4), (8, 4), (12, 6), (16, 8), (32, 8)]
+    )
+    def test_one_thread_per_physical_core_between_4_and_8(
+        self, monkeypatch: pytest.MonkeyPatch, logical: Any, expected: int
+    ) -> None:
+        from core import transcriber
+
+        monkeypatch.setattr(transcriber.os, "cpu_count", lambda: logical)
+        assert transcriber._cpu_threads() == expected
+
+
 class TestTranscribeErrors:
     def test_empty_audio_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: Dict[str, Any] = {}
@@ -126,6 +187,7 @@ class TestTranscribeErrors:
             transcribe=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
         )
         monkeypatch.setattr(Transcriber, "_load_model", lambda self: None)
+        monkeypatch.setattr(config, "BATCH_SIZE", 0)
 
         with pytest.raises(TranscriberError):
             t.transcribe(np.zeros(1600, dtype=np.float32))

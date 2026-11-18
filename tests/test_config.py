@@ -1,5 +1,5 @@
 """
-Tests for core.config — defaults, load/save, update whitelist, validation.
+Tests for core.config — defaults, load/save, validation.
 """
 
 from __future__ import annotations
@@ -16,13 +16,14 @@ _DEFAULTS = {
     "DEVICE": "cpu",
     "COMPUTE_TYPE": "int8",
     "LANGUAGE": "es",
-    "SAMPLE_RATE": 16_000,
-    "CHANNELS": 1,
     "HOTKEY": "F10",
     "AUTO_COPY": True,
+    "AUTO_PASTE": True,
     "AUTO_SAVE": True,
+    "SOUNDS": True,
     "MICROPHONE_DEVICE": None,
     "MODEL_UNLOAD_MIN": 10,
+    "BATCH_SIZE": 8,
 }
 
 
@@ -50,11 +51,12 @@ class TestDefaults:
         assert config.MODEL == "turbo"
         assert config.LANGUAGE == "es"
         assert config.HOTKEY == "F10"
-        assert config.SAMPLE_RATE == 16_000
-        assert config.CHANNELS == 1
         assert config.AUTO_COPY is True
+        assert config.AUTO_PASTE is True
         assert config.AUTO_SAVE is True
+        assert config.SOUNDS is True
         assert config.MICROPHONE_DEVICE is None
+        assert config.BATCH_SIZE == 8
 
     def test_paths_are_set_after_init(self, isolated: None) -> None:
         config.init()
@@ -73,9 +75,10 @@ class TestLoadSave:
                     "language": "en",
                     "hotkey": "F9",
                     "auto_copy": False,
+                    "auto_paste": False,
+                    "sounds": False,
                     "microphone_device": 2,
-                    "sample_rate": 48000,
-                    "channels": 2,
+                    "batch_size": 0,
                 }
             ),
             encoding="utf-8",
@@ -85,9 +88,26 @@ class TestLoadSave:
         assert config.LANGUAGE == "en"
         assert config.HOTKEY == "F9"
         assert config.AUTO_COPY is False
+        assert config.AUTO_PASTE is False
+        assert config.SOUNDS is False
         assert config.MICROPHONE_DEVICE == 2
-        assert config.SAMPLE_RATE == 48000
-        assert config.CHANNELS == 2
+        assert config.BATCH_SIZE == 0
+
+    def test_audio_format_is_not_configurable(
+        self, isolated: None, tmp_path: Path
+    ) -> None:
+        """Whisper only accepts 16 kHz mono: old config files can't break it."""
+        tmp_path.joinpath("config.json").write_text(
+            json.dumps({"sample_rate": 48000, "channels": 2}), encoding="utf-8"
+        )
+        config.init()
+        assert config.SAMPLE_RATE == 16_000
+        assert config.CHANNELS == 1
+
+        config.save()
+        raw = json.loads(config.CONFIG_PATH.read_text(encoding="utf-8"))
+        assert "sample_rate" not in raw
+        assert "channels" not in raw
 
     def test_save_persists_values(self, isolated: None, tmp_path: Path) -> None:
         tmp_path.joinpath("config.json").write_text(
@@ -122,25 +142,6 @@ class TestLoadSave:
         assert config.MODEL == "base"
 
 
-class TestUpdateWhitelist:
-    def test_update_accepts_known_keys(self, isolated: None) -> None:
-        config.init()
-        config.update(MODEL="small", LANGUAGE="de")
-        assert config.MODEL == "small"
-        assert config.LANGUAGE == "de"
-
-    def test_update_ignores_unknown_keys(self, isolated: None) -> None:
-        config.init()
-        config.update(INVALID_KEY="should_be_ignored", NOT_CONFIG="x")
-        assert not hasattr(config, "INVALID_KEY")
-
-    def test_update_ignores_internal_names(self, isolated: None) -> None:
-        config.init()
-        config.update(BASE_DIR="/tmp/hack", init=lambda: None, logger="owned")
-        assert config.BASE_DIR != "/tmp/hack"
-        assert callable(config.init)
-
-
 class TestValidation:
     def test_invalid_string_fields_fallback(
         self, isolated: None, tmp_path: Path
@@ -152,25 +153,6 @@ class TestValidation:
         config.init()
         assert config.MODEL == "turbo"
         assert config.HOTKEY == "F10"
-
-    def test_invalid_sample_rate_fallback(
-        self, isolated: None, tmp_path: Path
-    ) -> None:
-        tmp_path.joinpath("config.json").write_text(
-            json.dumps(
-                {
-                    "model": "turbo",
-                    "language": "es",
-                    "hotkey": "F10",
-                    "sample_rate": -1,
-                    "channels": 0,
-                }
-            ),
-            encoding="utf-8",
-        )
-        config.init()
-        assert config.SAMPLE_RATE == 16_000
-        assert config.CHANNELS == 1
 
     def test_bogus_json_fallback(self, isolated: None, tmp_path: Path) -> None:
         tmp_path.joinpath("config.json").write_text(
@@ -242,49 +224,6 @@ class TestValidation:
         assert config.HOTKEY == "INSERT"
 
 
-class TestUpdateTypeGuard:
-    def test_update_rejects_mismatched_types(self, isolated: None) -> None:
-        config.init()
-        before = (
-            config.MODEL,
-            config.HOTKEY,
-            config.SAMPLE_RATE,
-            config.CHANNELS,
-            config.AUTO_COPY,
-            config.AUTO_SAVE,
-            config.MICROPHONE_DEVICE,
-            config.MODEL_UNLOAD_MIN,
-        )
-        config.update(
-            MODEL=None,
-            HOTKEY=123,
-            SAMPLE_RATE="x",
-            CHANNELS=True,
-            AUTO_COPY=1,
-            AUTO_SAVE="yes",
-            MICROPHONE_DEVICE="1",
-            MODEL_UNLOAD_MIN="never",
-        )
-        after = (
-            config.MODEL,
-            config.HOTKEY,
-            config.SAMPLE_RATE,
-            config.CHANNELS,
-            config.AUTO_COPY,
-            config.AUTO_SAVE,
-            config.MICROPHONE_DEVICE,
-            config.MODEL_UNLOAD_MIN,
-        )
-        assert before == after
-
-    def test_valid_update_still_applies(self, isolated: None) -> None:
-        config.init()
-        config.update(MICROPHONE_DEVICE=0, SAMPLE_RATE=48000, AUTO_COPY=False)
-        assert config.MICROPHONE_DEVICE == 0
-        assert config.SAMPLE_RATE == 48000
-        assert config.AUTO_COPY is False
-
-
 class TestModelUnloadMin:
     def test_default_is_10(self, isolated: None) -> None:
         config.init()
@@ -337,3 +276,31 @@ class TestModelUnloadMin:
         config.save()
         raw = json.loads(config.CONFIG_PATH.read_text(encoding="utf-8"))
         assert raw["model_unload_min"] == 20
+
+
+class TestBatchSize:
+    def test_negative_rejected(self, isolated: None, tmp_path: Path) -> None:
+        tmp_path.joinpath("config.json").write_text(
+            json.dumps({"batch_size": -1}), encoding="utf-8"
+        )
+        config.init()
+        assert config.BATCH_SIZE == 8
+
+    def test_bool_rejected(self, isolated: None, tmp_path: Path) -> None:
+        tmp_path.joinpath("config.json").write_text(
+            json.dumps({"batch_size": True}), encoding="utf-8"
+        )
+        config.init()
+        assert config.BATCH_SIZE == 8
+
+    def test_valid_value_loaded_and_persisted(
+        self, isolated: None, tmp_path: Path
+    ) -> None:
+        tmp_path.joinpath("config.json").write_text(
+            json.dumps({"batch_size": 4}), encoding="utf-8"
+        )
+        config.init()
+        assert config.BATCH_SIZE == 4
+        config.save()
+        raw = json.loads(config.CONFIG_PATH.read_text(encoding="utf-8"))
+        assert raw["batch_size"] == 4

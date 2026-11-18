@@ -194,10 +194,6 @@ class Recorder:
                 logger.error("Error while closing audio stream: %s", exc)
             self._stream = None
 
-    def _resample(self, audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
-        """Resample audio from orig_sr to target_sr — delegates to core.audio."""
-        return resample(audio, orig_sr, target_sr)
-
     @property
     def recording_duration(self) -> float:
         """Current duration of the ongoing recording, in seconds.

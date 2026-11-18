@@ -30,7 +30,6 @@ class TranscriptionResult:
       - Clipboard (to copy text)
       - Storage   (to save files)
       - GUI       (to display)
-      - CLI       (to print)
 
     It is intentionally rich: contains timestamps, language, duration
     and metadata so consumers can choose what they need.

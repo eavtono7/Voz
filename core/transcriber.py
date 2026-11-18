@@ -3,14 +3,12 @@ Speech-to-text via faster-whisper.
 
 Transcriber converts raw audio arrays into TranscriptionResult objects.
 It never writes files and never touches the microphone.
-
-Audio file loading is provided as a separate function (load_audio)
-for use by the CLI pipeline.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from pathlib import Path
@@ -19,7 +17,6 @@ from typing import Optional
 import numpy as np
 
 from core.models import TranscriptionResult, Segment
-from core.audio import resample as _resample_audio
 from core import config
 
 # Values that mean "let Whisper detect the language" instead of a
@@ -41,6 +38,17 @@ def _normalize_language(lang: Optional[str]) -> Optional[str]:
     return stripped
 
 logger = logging.getLogger(__name__)
+
+
+def _cpu_threads() -> int:
+    """Threads for CPU inference: one per physical core, between 4 and 8.
+
+    faster-whisper defaults to 4. With batched transcription, 8 threads
+    measured ~1.4x faster on an 8-core CPU; beyond 8 there was no gain.
+    os.cpu_count() reports logical cores, hence the halving.
+    """
+    logical = os.cpu_count() or 4
+    return max(4, min(8, logical // 2))
 
 
 class TranscriberError(Exception):
@@ -113,6 +121,7 @@ class Transcriber:
                     model_root,
                     device=self.device,
                     compute_type=self.compute_type,
+                    cpu_threads=_cpu_threads(),
                     download_root=str(config.MODEL_DIR),
                 )
                 logger.info("Model loaded successfully")
@@ -229,19 +238,39 @@ class Transcriber:
 
         start = time.monotonic()
 
+        options = dict(
+            language=lang,
+            beam_size=5,
+            vad_filter=True,
+            vad_parameters=dict(
+                min_silence_duration_ms=500,
+                threshold=0.5,
+            ),
+        )
+
         try:
-            logger.debug("Calling model.transcribe()")
-            segments_gen, info = self._model.transcribe(
-                audio,
-                language=lang,
-                beam_size=5,
-                vad_filter=True,
-                vad_parameters=dict(
-                    min_silence_duration_ms=500,
-                    threshold=0.5,
-                ),
-            )
-            logger.debug("model.transcribe() returned")
+            batch_size = config.BATCH_SIZE
+            if batch_size > 1:
+                # Batched mode: the audio is cut at silences and several
+                # chunks go through the model at once. Measured ~2x faster
+                # on multi-minute dictations (CPU), same text.
+                from faster_whisper import BatchedInferencePipeline
+
+                # without_timestamps=False is NOT optional: with the batched
+                # default (True) whole 30 s chunks came back in lowercase
+                # with no punctuation at all. Same speed either way.
+                logger.debug("Calling batched transcribe (batch_size=%d)", batch_size)
+                segments_gen, info = BatchedInferencePipeline(
+                    model=self._model
+                ).transcribe(
+                    audio,
+                    batch_size=batch_size,
+                    without_timestamps=False,
+                    **options,
+                )
+            else:
+                logger.debug("Calling model.transcribe()")
+                segments_gen, info = self._model.transcribe(audio, **options)
 
             detected_language = info.language if info is not None else "unknown"
             segments: list[Segment] = []
@@ -287,82 +316,3 @@ class Transcriber:
             raise TranscriberError(
                 f"Transcription failed: {exc}"
             ) from exc
-
-
-# ── Audio file loading ────────────────────────────────────────────────────────
-
-
-def load_audio(path: Path, target_sr: int = 16_000) -> np.ndarray:
-    """Load an audio file and return a 1-D float32 array at *target_sr* Hz.
-
-    Supports: WAV, FLAC, OGG (via soundfile),
-              MP3, M4A, AAC, etc. (via av / ffmpeg).
-
-    Mono is produced by averaging channels.
-
-    Raises:
-        FileNotFoundError – path does not exist.
-        ValueError – file cannot be decoded.
-    """
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"Audio file not found: {path}")
-
-    # ── Try soundfile first (fast for WAV/FLAC/OGG) ──────────────────────
-    try:
-        import soundfile as sf
-
-        audio, sr = sf.read(str(path), dtype="float32")
-        if audio.ndim > 1:
-            audio = audio.mean(axis=1)
-        if sr != target_sr:
-            audio = _resample(audio, sr, target_sr)
-        return audio
-    except Exception as exc:
-        logger.debug("soundfile could not decode %s: %s", path.name, exc)
-
-    # ── Fall back to av (handles MP3, M4A, AAC, …) ───────────────────────
-    try:
-        import av
-
-        container = av.open(str(path))
-        stream = next((s for s in container.streams if s.type == "audio"), None)
-        if stream is None:
-            raise ValueError(f"No audio stream found in {path}")
-
-        resampler = av.AudioResampler(
-            format="fltp",
-            layout="mono",
-            rate=target_sr,
-        )
-
-        resampled_frames: list[av.AudioFrame] = []
-        for frame in container.decode(audio=0):
-            frame.pts = None
-            for f in resampler.resample(frame):
-                resampled_frames.append(f)
-
-        if not resampled_frames:
-            raise ValueError(f"No audio frames found in {path}")
-
-        # Flush remaining frames from the resampler
-        for f in resampler.resample(None):
-            resampled_frames.append(f)
-
-        audio = np.concatenate(
-            [f.to_ndarray() for f in resampled_frames], axis=1
-        )
-        audio = audio[0].astype(np.float32)
-        return audio
-
-    except Exception as exc:
-        raise ValueError(
-            f"Cannot decode audio file '{path}': {exc}"
-        ) from exc
-
-
-def _resample(
-    audio: np.ndarray, orig_sr: int, target_sr: int
-) -> np.ndarray:
-    """Resample audio to *target_sr* — delegates to core.audio.resample."""
-    return _resample_audio(audio, orig_sr, target_sr)

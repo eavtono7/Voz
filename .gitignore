@@ -16,6 +16,9 @@ build/
 # Models (se descargan solos)
 models/
 
+# Configuración personal (se crea sola en el primer arranque)
+config.json
+
 # Data (se genera solo)
 data/dictations/
 data/logs/

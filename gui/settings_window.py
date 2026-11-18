@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 from typing import Callable, Optional
 
 from core import config
@@ -59,7 +59,9 @@ class SettingsWindow(tk.Toplevel):
         self._model_var = tk.StringVar()
         self._hotkey_var = tk.StringVar()
         self._auto_copy_var = tk.BooleanVar()
+        self._auto_paste_var = tk.BooleanVar()
         self._auto_save_var = tk.BooleanVar()
+        self._sounds_var = tk.BooleanVar()
 
         self._build_ui()
         self._load_values()
@@ -98,7 +100,11 @@ class SettingsWindow(tk.Toplevel):
 
         # ── Audio section ──────────────────────────────────────────────
         self._section_header(main, "Audio")
-        self._section_hint(main, "Selecciona el micrófono que usarás para dictar.")
+        self._section_hint(
+            main,
+            "Selecciona el micrófono que usarás para dictar.\n"
+            '"Sistema (por defecto)" sigue al micrófono que tenga Windows.',
+        )
 
         mic_frame = tk.Frame(main, bg=self._bg)
         mic_frame.pack(fill="x", pady=(6, 16))
@@ -184,29 +190,24 @@ class SettingsWindow(tk.Toplevel):
         opt = tk.Frame(main, bg=self._bg)
         opt.pack(fill="x", pady=(6, 10))
 
-        tk.Checkbutton(
-            opt,
-            text="Copiar al portapapeles al terminar",
-            variable=self._auto_copy_var,
-            bg=self._bg,
-            fg=self._fg,
-            selectcolor=self._entry_bg,
-            activebackground=self._bg,
-            activeforeground=self._fg,
-            font=("Segoe UI", 10),
-        ).pack(anchor="w")
-
-        tk.Checkbutton(
-            opt,
-            text="Guardar transcripción en archivo",
-            variable=self._auto_save_var,
-            bg=self._bg,
-            fg=self._fg,
-            selectcolor=self._entry_bg,
-            activebackground=self._bg,
-            activeforeground=self._fg,
-            font=("Segoe UI", 10),
-        ).pack(anchor="w")
+        options = [
+            ("Copiar al portapapeles al terminar", self._auto_copy_var),
+            ("Pegar automáticamente donde esté el cursor", self._auto_paste_var),
+            ("Guardar transcripción en archivo", self._auto_save_var),
+            ("Avisos sonoros (inicio, fin y texto listo)", self._sounds_var),
+        ]
+        for text, var in options:
+            tk.Checkbutton(
+                opt,
+                text=text,
+                variable=var,
+                bg=self._bg,
+                fg=self._fg,
+                selectcolor=self._entry_bg,
+                activebackground=self._bg,
+                activeforeground=self._fg,
+                font=("Segoe UI", 10),
+            ).pack(anchor="w")
 
         # ── Buttons ────────────────────────────────────────────────────
         btn_frame = tk.Frame(main, bg=self._bg)
@@ -319,7 +320,9 @@ class SettingsWindow(tk.Toplevel):
         self._model_var.set(config.MODEL)
         self._hotkey_var.set(config.HOTKEY)
         self._auto_copy_var.set(config.AUTO_COPY)
+        self._auto_paste_var.set(config.AUTO_PASTE)
         self._auto_save_var.set(config.AUTO_SAVE)
+        self._sounds_var.set(config.SOUNDS)
 
     def _selected_mic_index(self) -> Optional[int]:
         label = self._mic_var.get()
@@ -331,8 +334,6 @@ class SettingsWindow(tk.Toplevel):
     def _save(self) -> None:
         hotkey = self._hotkey_var.get().strip().upper()
         if not hotkey:
-            from tkinter import messagebox
-
             messagebox.showerror(
                 "Error", "La tecla rápida no puede estar vacía.", parent=self
             )
@@ -340,8 +341,6 @@ class SettingsWindow(tk.Toplevel):
             return
 
         if not HotkeyListener.is_supported(hotkey):
-            from tkinter import messagebox
-
             messagebox.showerror(
                 "Error",
                 f"La tecla \u00ab{hotkey}\u00bb no está soportada.\n\n"
@@ -357,11 +356,11 @@ class SettingsWindow(tk.Toplevel):
         config.MODEL = self._model_var.get()
         config.HOTKEY = hotkey
         config.AUTO_COPY = self._auto_copy_var.get()
+        config.AUTO_PASTE = self._auto_paste_var.get()
         config.AUTO_SAVE = self._auto_save_var.get()
+        config.SOUNDS = self._sounds_var.get()
 
         if not config.save():
-            from tkinter import messagebox
-
             messagebox.showerror(
                 "Error", "No se pudo guardar la configuración.", parent=self
             )
