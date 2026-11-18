@@ -38,7 +38,15 @@ pip install -r requirements.txt
 .\build.ps1
 ```
 
-Para compartirlo, comprimí la carpeta `dist\voz\` (sin `models\`, `data\` ni `config.json`): quien la reciba ejecuta `voz.exe` y el modelo se descarga solo la primera vez.
+### Compartirlo con otra persona
+
+```powershell
+.\empaquetar.ps1
+```
+
+Crea `dist\Voz.zip` (~130 MB) solo con el programa: **nunca incluye tus dictados ni tu configuración**. Quien lo reciba descomprime, abre `voz\voz.exe` y el modelo se descarga solo la primera vez. Con `.\empaquetar.ps1 -ConModelo` el zip lleva también el modelo (~1.6 GB) y funciona sin internet.
+
+No comprimas `dist\voz\` a mano: esa carpeta contiene también `data\` (todo lo que dictaste) y `config.json`.
 
 ## 🎮 Atajos y uso
 
@@ -201,7 +209,9 @@ python -m pytest -q
 .\build.ps1
 ```
 
-`build.ps1` compila con PyInstaller y conserva `config.json`, `data\` y el modelo descargado de `dist\voz\`.
+`build.ps1` compila con PyInstaller en una carpeta temporal y solo reemplaza `voz.exe` e `_internal\` dentro de `dist\voz\`. `config.json`, `data\` y el modelo descargado no se tocan ni se copian.
+
+`main.py` es el punto de entrada: PyInstaller lo empaqueta como `voz.exe`, así que hace falta aunque solo uses el ejecutable.
 
 ## 📄 Licencia
 

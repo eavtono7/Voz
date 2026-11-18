@@ -1,40 +1,20 @@
 # Python
 __pycache__/
 *.pyc
-*.pyo
-*.egg-info/
-*.egg
 .venv/
-env/
-
-# Build output
-dist/
-build/
-*.pyz
-.build-backup/
-
-# Models (se descargan solos)
-models/
-
-# Configuración personal (se crea sola en el primer arranque)
-config.json
-
-# Data (se genera solo)
-data/dictations/
-data/logs/
-data/output/
-data/voz.log
-
-# Cache
-.cache/
 .pytest_cache/
 
-# IDE
+# Compilación (build.ps1): temporales y resultado.
+# dist/voz/ contiene además el modelo, la configuración y los dictados.
+build/
+dist/
+
+# Datos personales del modo script (python main.py)
+config.json
+data/
+
+# IDE / sistema
 .vscode/
 .idea/
-*.swp
-*.swo
-
-# OS
 Thumbs.db
 .DS_Store
