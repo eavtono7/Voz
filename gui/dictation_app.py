@@ -12,6 +12,12 @@ States
     done         – text copied / pasted, back to idle after 2 s
     error        – something went wrong; the next hotkey press retries
 
+Feedback
+--------
+The status bar shows what is happening NOW (with live clocks while
+recording and transcribing). The activity panel above it keeps a short
+timestamped history. Neither ever writes into the dictation text area.
+
 Threads
 -------
 Only the Tk thread touches widgets or the state machine. Background threads
@@ -42,6 +48,12 @@ from gui.settings_window import SettingsWindow
 logger = logging.getLogger(__name__)
 
 
+def _clock(seconds: float) -> str:
+    """Seconds → 'm:ss' (0:07, 3:59, 14:05), the way a recorder shows time."""
+    total = max(0, int(seconds))
+    return f"{total // 60}:{total % 60:02d}"
+
+
 class App(tk.Tk):
     """Main dictation window."""
 
@@ -54,19 +66,23 @@ class App(tk.Tk):
     }
 
     _POLL_MS = 25          # how often the Tk thread drains _post()ed work
-    _REC_TICK_MS = 500     # live "Grabando... 12.5s" refresh
+    _TICK_MS = 500         # live clock refresh (recording / transcribing)
+    _ACTIVITY_LINES = 6    # visible height of the activity panel
+    _ACTIVITY_KEEP = 300   # older activity lines are dropped
     _DONE_MS = 2_000       # how long the "done" summary stays before idle
 
     def __init__(self) -> None:
         super().__init__()
 
         self.title("Voz — Dictado por voz")
-        self.geometry("640x440")
+        self.geometry("640x540")
 
         # ── State ────────────────────────────────────────────────────────
         self._state: str = "idle"
         self._state_detail: str = ""          # error text / done outcome
-        self._transcribing_note: str = ""     # what the worker is doing now
+        self._transcribing_note: str = ""     # e.g. "Cargando modelo..."
+        self._transcribing_audio: float | None = None  # seconds being transcribed
+        self._transcribing_since: float = 0.0          # monotonic start time
         self._session_count: int = 0
         self._last_audio_secs: float = 0.0
         self._last_chars: int = 0
@@ -76,7 +92,7 @@ class App(tk.Tk):
         self._running: bool = True
 
         # ── Timers ───────────────────────────────────────────────────────
-        self._recording_tick_id: str | None = None
+        self._tick_id: str | None = None
         self._flash_restore_id: str | None = None
         self._return_to_idle_id: str | None = None
         self._unload_timer_id: str | None = None
@@ -156,6 +172,28 @@ class App(tk.Tk):
         )
         self._status_lbl.pack(side="left", padx=10, fill="x", expand=True)
 
+        # ── Activity panel: short timestamped history, read-only ─────────
+        self._activity = tk.Text(
+            main,
+            height=self._ACTIVITY_LINES, width=1,
+            bg="#232323", fg="#9d9d9d",
+            font=("Segoe UI", 9),
+            wrap="none",
+            relief="flat",
+            padx=10, pady=6,
+            spacing1=1, spacing3=1,
+            cursor="arrow",
+            takefocus=0,
+            tabs=(62, 86),  # px: time | icon | message, whatever the icon width
+            state="disabled",
+        )
+        self._activity.pack(side="bottom", fill="x", pady=(8, 0))
+        self._activity.tag_configure("time", foreground="#6a9955")
+        self._activity.tag_configure("info", foreground="#9d9d9d")
+        self._activity.tag_configure("good", foreground="#4ec9b0")
+        self._activity.tag_configure("warn", foreground="#dcdcaa")
+        self._activity.tag_configure("bad", foreground="#f44747")
+
         # ── Model-loading bar (hidden unless a model is loading) ─────────
         self._progress_frame = tk.Frame(main, bg="#1e1e1e")
         self._progress_lbl = tk.Label(
@@ -195,7 +233,7 @@ class App(tk.Tk):
 
         # Never let the window shrink below what the button bar needs.
         self.update_idletasks()
-        self.minsize(btn_bar.winfo_reqwidth() + 20, 260)
+        self.minsize(btn_bar.winfo_reqwidth() + 20, 360)
 
         self._refresh_status()
 
@@ -252,6 +290,7 @@ class App(tk.Tk):
             # surprise minutes later, when nobody is watching.
             sounds.play("error")
             self._flash("⏳  Aún transcribiendo — espera al aviso para volver a grabar")
+            self._note("⏳  F10 ignorada: aún transcribiendo", "warn")
         else:  # idle, done, error
             self._start_recording()
 
@@ -270,17 +309,23 @@ class App(tk.Tk):
         state, hotkey = self._state, config.HOTKEY
         if state == "recording":
             return (
-                f"🔴  Grabando... {self._recorder.recording_duration:.1f}s"
+                f"🔴  Grabando... {_clock(self._recorder.recording_duration)}"
                 f" — {hotkey} para detener"
             )
         if state == "transcribing":
-            return f"🟡  {self._transcribing_note or 'Transcribiendo...'}"
+            if self._transcribing_audio is None:
+                return f"🟡  {self._transcribing_note or 'Transcribiendo...'}"
+            elapsed = time.monotonic() - self._transcribing_since
+            return (
+                f"🟡  Transcribiendo {_clock(self._transcribing_audio)} de audio"
+                f"... llevas {_clock(elapsed)}"
+            )
         if state == "done":
             return (
                 f"✅  {self._state_detail or 'Listo'} — "
-                f"{self._last_audio_secs:.1f}s de audio · "
+                f"{_clock(self._last_audio_secs)} de audio · "
                 f"{self._last_chars} caracteres · "
-                f"{self._last_proc_secs:.1f}s de proceso"
+                f"{_clock(self._last_proc_secs)} de proceso"
             )
         if state == "error":
             return f"❌  {self._state_detail or 'Error desconocido'}"
@@ -307,6 +352,27 @@ class App(tk.Tk):
         self._force_paint()
         self._cancel_timer("_flash_restore_id")
         self._flash_restore_id = self.after(duration_ms, self._refresh_status)
+
+    def _note(self, msg: str, kind: str = "info") -> None:
+        """Add a timestamped line to the activity panel (and to voz.log).
+
+        kind: "info", "good", "warn" or "bad" — only changes the colour.
+        """
+        logger.info("Activity: %s", msg)
+        panel = self._activity
+        panel.configure(state="normal")
+        if panel.index("end-1c") != "1.0":
+            panel.insert("end", "\n")
+        icon, sep, body = msg.partition("  ")  # messages are "<icon>  <text>"
+        if not sep:
+            icon, body = "", msg
+        panel.insert("end", datetime.now().strftime("%H:%M:%S") + "\t", "time")
+        panel.insert("end", f"{icon}\t{body}", kind)
+        extra = int(panel.index("end-1c").split(".")[0]) - self._ACTIVITY_KEEP
+        if extra > 0:
+            panel.delete("1.0", f"{extra + 1}.0")
+        panel.configure(state="disabled")
+        panel.see("end")
 
     def _force_paint(self) -> None:
         """Force immediate window repaint via Win32 API (works without focus)."""
@@ -380,19 +446,24 @@ class App(tk.Tk):
 
         sounds.play("start")
         self._set_state("recording")
-        self._recording_tick_id = self.after(self._REC_TICK_MS, self._tick_recording)
+        self._note("🎙  Grabando")
+        self._start_tick()
 
         # If the model was unloaded while idle, reload it NOW, while the
         # user talks, so it is ready by the time they stop.
         self._load_model_async()
 
-    def _tick_recording(self) -> None:
-        """Refresh the live seconds counter while recording."""
-        self._recording_tick_id = None
-        if self._state != "recording" or not self._running:
+    def _start_tick(self) -> None:
+        """(Re)start the live clock shown while recording / transcribing."""
+        self._cancel_timer("_tick_id")
+        self._tick_id = self.after(self._TICK_MS, self._tick)
+
+    def _tick(self) -> None:
+        self._tick_id = None
+        if self._state not in ("recording", "transcribing") or not self._running:
             return
         self._refresh_status()
-        self._recording_tick_id = self.after(self._REC_TICK_MS, self._tick_recording)
+        self._tick_id = self.after(self._TICK_MS, self._tick)
 
     def _stop_and_transcribe(self) -> None:
         """RECORDING → TRANSCRIBING (stop + resample + transcribe off-thread).
@@ -400,10 +471,11 @@ class App(tk.Tk):
         recorder.stop() may take hundreds of ms on long dictations (buffer
         concat + resample) — never run it on the UI thread.
         """
-        self._cancel_timer("_recording_tick_id")
         sounds.play("stop")
         self._transcribing_note = ""
+        self._transcribing_audio = None
         self._set_state("transcribing")
+        self._start_tick()
 
         self._transcription_thread = threading.Thread(
             target=self._worker_transcribe,
@@ -428,18 +500,14 @@ class App(tk.Tk):
         try:
             if not transcriber.is_model_loaded:
                 self._post(
-                    self._show_transcribing,
+                    self._show_model_wait,
                     "Cargando modelo..."
                     if transcriber.is_model_cached()
                     else "Descargando modelo (~1.5 GB)...",
                 )
                 transcriber.preload()
 
-            audio_secs = len(audio) / config.SAMPLE_RATE
-            self._post(
-                self._show_transcribing,
-                f"Transcribiendo {audio_secs:.1f}s de audio...",
-            )
+            self._post(self._show_transcribing, len(audio) / config.SAMPLE_RATE)
             t0 = time.monotonic()
             result = transcriber.transcribe(audio)
             proc_secs = time.monotonic() - t0
@@ -450,11 +518,21 @@ class App(tk.Tk):
 
         self._post(self._on_transcription_done, result, proc_secs)
 
-    def _show_transcribing(self, note: str) -> None:
-        """Show what the worker is doing right now (Tk thread only)."""
+    def _show_model_wait(self, note: str) -> None:
+        """The worker is waiting for the model before it can transcribe."""
         if self._state != "transcribing":
             return
         self._transcribing_note = note
+        self._note(f"⏳  {note}")
+        self._refresh_status()
+
+    def _show_transcribing(self, audio_secs: float) -> None:
+        """The worker starts transcribing *audio_secs* of audio: start the clock."""
+        if self._state != "transcribing":
+            return
+        self._transcribing_audio = audio_secs
+        self._transcribing_since = time.monotonic()
+        self._note(f"⏹  {_clock(audio_secs)} grabados · transcribiendo")
         self._refresh_status()
 
     def _on_transcription_done(self, result, proc_secs: float = 0.0) -> None:
@@ -498,12 +576,15 @@ class App(tk.Tk):
             ).start()
 
         self._append_text(text)
-        self._counter_lbl.configure(
-            text=f"Dictados: {self._session_count}  ·  Último: {result.duration:.1f}s",
-        )
+        self._counter_lbl.configure(text=f"Dictados: {self._session_count}")
 
         sounds.play("done")
+        self._cancel_timer("_tick_id")
         self._set_state("done", outcome)
+        self._note(
+            f"✅  {outcome} · {len(text)} caracteres · {_clock(proc_secs)} de proceso",
+            "good" if outcome != "No se pudo copiar" else "warn",
+        )
         self._return_to_idle_id = self.after(self._DONE_MS, self._go_idle)
 
     def _window_has_focus(self) -> bool:
@@ -524,19 +605,27 @@ class App(tk.Tk):
         except Exception as exc:
             logger.error("Auto-save failed: %s", exc)
             self._post(self._flash, f"⚠️  Auto-guardado falló: {exc}")
+            self._post(self._note, f"⚠️  Auto-guardado falló: {exc}", "warn")
 
     def _on_nothing_to_paste(self, reason: str) -> None:
         """TRANSCRIBING → IDLE: silence, or nothing reached the microphone."""
-        logger.warning("Nothing to paste: %s", reason)
         sounds.play("error")
+        self._cancel_timer("_tick_id")
         self._go_idle()
         self._flash(f"⚠️  {reason}")
+        self._note(f"⚠️  {reason}", "warn")
 
     def _on_error(self, msg: str) -> None:
         """ANY → ERROR (friendly text in the bar, raw text in voz.log)."""
         logger.error("Dictation error: %s", msg)
         sounds.play("error")
-        self._set_state("error", self._friendly_error(msg))
+        self._cancel_timer("_tick_id")
+        friendly = self._friendly_error(msg)
+        self._set_state("error", friendly)
+        # The panel keeps the technical detail too: it is what you need to
+        # read (or send) when something really breaks.
+        detail = "" if friendly == msg[:120] else f"  ({msg[:160]})"
+        self._note(f"❌  {friendly}{detail}", "bad")
         self._apply_pending_settings()
         self._schedule_model_unload()
 
@@ -614,6 +703,7 @@ class App(tk.Tk):
         if self._state in ("recording", "transcribing"):
             self._pending_settings = True
             self._flash("⚙️  Guardado — se aplicará al terminar el dictado")
+            self._note("⚙️  Configuración guardada: se aplicará al terminar el dictado")
             return
         self._apply_settings()
 
@@ -642,6 +732,7 @@ class App(tk.Tk):
                 f"{exc}\n\nElige otra tecla en Configuración.",
             )
         self._flash("⚙️  Configuración actualizada")
+        self._note("⚙️  Configuración actualizada")
 
     # ═══════════════════════════════════════════════════════════════════════
     # Model loading / idle unload
@@ -657,11 +748,14 @@ class App(tk.Tk):
         if transcriber.is_model_loaded:
             return
         if show_progress:
-            self._show_progress(
+            msg = (
                 "Cargando modelo..."
                 if transcriber.is_model_cached()
                 else "Descargando modelo (~1.5 GB)..."
             )
+            self._show_progress(msg)
+            self._note(f"⏳  {msg}")
+        started = time.monotonic()
 
         def _load() -> None:
             try:
@@ -670,11 +764,20 @@ class App(tk.Tk):
             except Exception as exc:
                 logger.warning("Model load failed (will retry on dictation): %s", exc)
                 ok = False
-            self._post(self._on_model_loaded, transcriber, ok, show_progress)
+            self._post(
+                self._on_model_loaded,
+                transcriber, ok, show_progress, time.monotonic() - started,
+            )
 
         threading.Thread(target=_load, daemon=True).start()
 
-    def _on_model_loaded(self, transcriber: Transcriber, ok: bool, announce: bool) -> None:
+    def _on_model_loaded(
+        self,
+        transcriber: Transcriber,
+        ok: bool,
+        announce: bool,
+        load_secs: float = 0.0,
+    ) -> None:
         """Model finished loading (Tk thread).
 
         Repaints from the state as it is NOW — the user may have started
@@ -682,8 +785,13 @@ class App(tk.Tk):
         """
         if announce:
             self._hide_progress()
-        if not ok or transcriber is not self._transcriber:
+        if transcriber is not self._transcriber:
             return
+        if not ok:
+            self._note("⚠️  No se pudo cargar el modelo: se reintentará al dictar", "warn")
+            return
+        if announce or self._model_asleep:
+            self._note(f"✅  Modelo listo ({load_secs:.1f} s)", "good")
         self._model_asleep = False
         self._refresh_status()
         if announce:
@@ -716,6 +824,10 @@ class App(tk.Tk):
             "🛌  Modelo en reposo — se recarga solo al grabar",
             duration_ms=5_000,
         )
+        self._note(
+            f"💤  Modelo en reposo tras {config.MODEL_UNLOAD_MIN} min sin uso"
+            " (RAM liberada; se recarga solo al grabar)"
+        )
 
     def _show_progress(self, msg: str) -> None:
         """Show the animated model-loading bar above the text area."""
@@ -746,7 +858,7 @@ class App(tk.Tk):
         """
         self._running = False
         for timer in (
-            "_recording_tick_id",
+            "_tick_id",
             "_flash_restore_id",
             "_return_to_idle_id",
             "_unload_timer_id",

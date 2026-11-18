@@ -231,7 +231,7 @@ class TestTextArea:
             with mock.patch.object(type(app._recorder), "start"):
                 app._handle_hotkey()              # recording
             app._set_state("transcribing")
-            app._show_transcribing("Transcribiendo 2.0s de audio...")
+            app._show_transcribing(2.0)
             self._dictate(app, "hola mundo")
             self._dictate(app, "segundo dictado")
             app._on_error("Unable to open microphone: boom")
@@ -261,7 +261,7 @@ class TestTextArea:
         app = self._make_app()
         try:
             min_width, min_height = app.minsize()
-            assert min_width < 640 and min_height <= 300  # compact, not 800x800
+            assert min_width < 640 and min_height <= 400  # compact, not 800x800
             app.geometry(f"{min_width}x{min_height}")
             app.update()
             for button in app.winfo_children()[0].winfo_children()[0].winfo_children():
@@ -366,21 +366,23 @@ class TestFeedback:
                 type(app._recorder),
                 "recording_duration",
                 new_callable=mock.PropertyMock,
-                return_value=1.2,
+                return_value=75.4,
             ):
-                app._tick_recording()
-            assert "1.2s" in app._status_lbl.cget("text")
+                app._tick()
+            assert "Grabando... 1:15" in app._status_lbl.cget("text")
             assert app._state == "recording"
+            assert app._tick_id is not None, "clock must keep ticking"
         finally:
             app.destroy()
 
-    def test_tick_ignores_when_not_recording(self) -> None:
+    def test_tick_stops_outside_recording_and_transcribing(self) -> None:
         app = self._make_app()
         try:
-            app._set_state("transcribing")
+            app._set_state("done", "Pegado")
             before = app._status_lbl.cget("text")
-            app._tick_recording()
+            app._tick()
             assert app._status_lbl.cget("text") == before
+            assert app._tick_id is None
         finally:
             app.destroy()
 
@@ -388,8 +390,13 @@ class TestFeedback:
         app = self._make_app()
         try:
             app._set_state("transcribing")
-            app._show_transcribing("Transcribiendo 7.3s de audio...")
-            assert "7.3s de audio" in app._status_lbl.cget("text")
+            app._show_transcribing(239.0)
+            assert "Transcribiendo 3:59 de audio" in app._status_lbl.cget("text")
+            assert "llevas 0:00" in app._status_lbl.cget("text")
+
+            app._transcribing_since -= 83  # 1 min 23 s later...
+            app._tick()
+            assert "llevas 1:23" in app._status_lbl.cget("text")
             assert app._state == "transcribing"
         finally:
             app.destroy()
@@ -407,13 +414,13 @@ class TestFeedback:
                  mock.patch.object(config, "AUTO_SAVE", False), \
                  mock.patch.object(type(app._clipboard), "copy", return_value=True):
                 result = types.SimpleNamespace(
-                    text="hola mundo", duration=7.3, language="es"
+                    text="hola mundo", duration=239.0, language="es"
                 )
-                app._on_transcription_done(result, 1.5)
+                app._on_transcription_done(result, 66.2)
             text = app._status_lbl.cget("text")
-            assert "7.3s de audio" in text
+            assert "3:59 de audio" in text
             assert "10 caracteres" in text
-            assert "1.5s de proceso" in text
+            assert "1:06 de proceso" in text
             assert app._state == "done"
         finally:
             app.destroy()
@@ -480,9 +487,9 @@ class TestFeedback:
         cancelled: list = []
         with mock.patch.object(app, "after_cancel", side_effect=lambda i: cancelled.append(i)):
             app._set_state("recording")
-            app._recording_tick_id = app.after(60_000, lambda: None)
+            app._tick_id = app.after(60_000, lambda: None)
             app._flash("algo")
-            tick_id = app._recording_tick_id
+            tick_id = app._tick_id
             flash_id = app._flash_restore_id
             app._transcription_thread = types.SimpleNamespace(
                 is_alive=lambda: False, join=lambda timeout=None: None
@@ -491,6 +498,109 @@ class TestFeedback:
             assert tick_id in cancelled
             assert flash_id in cancelled
         # destroy already done by _on_close
+
+
+class TestActivityPanel:
+    """Timestamped history of what the app did, apart from the dictation."""
+
+    def _make_app(self):
+        return TestStateMachine._make_app(self)
+
+    @staticmethod
+    def _lines(app) -> list[str]:
+        return app._activity.get("1.0", "end-1c").splitlines()
+
+    def test_clock_format(self) -> None:
+        from gui.dictation_app import _clock
+
+        assert [_clock(v) for v in (0, 7.9, 59.99, 60, 239.4, 845)] == [
+            "0:00", "0:07", "0:59", "1:00", "3:59", "14:05",
+        ]
+
+    def test_a_dictation_leaves_three_lines_and_clean_text(self) -> None:
+        import re
+        import types
+        from unittest import mock
+
+        import core.config as config
+
+        app = self._make_app()
+        try:
+            clip = type(app._clipboard)
+            with mock.patch.object(type(app._recorder), "start"), \
+                 mock.patch.object(app, "_load_model_async"), \
+                 mock.patch.object(config, "AUTO_COPY", True), \
+                 mock.patch.object(config, "AUTO_PASTE", True), \
+                 mock.patch.object(config, "AUTO_SAVE", False), \
+                 mock.patch.object(app, "_window_has_focus", return_value=False), \
+                 mock.patch.object(clip, "copy", return_value=True), \
+                 mock.patch.object(clip, "paste", return_value=True):
+                app._handle_hotkey()                      # start
+                app._set_state("transcribing")
+                app._show_transcribing(239.0)             # worker reports audio
+                app._on_transcription_done(
+                    types.SimpleNamespace(text="hola mundo", duration=239.0, language="es"),
+                    66.2,
+                )
+
+            lines = self._lines(app)
+            assert len(lines) == 3
+            assert all(re.match(r"\d\d:\d\d:\d\d\t.+\t.+", line) for line in lines)
+            assert "Grabando" in lines[0]
+            assert "3:59 grabados" in lines[1] and "transcribiendo" in lines[1]
+            assert "Pegado" in lines[2]
+            assert "10 caracteres" in lines[2] and "1:06 de proceso" in lines[2]
+            # ...and none of it leaks into the dictation text.
+            assert app._text.get("1.0", "end-1c") == "hola mundo"
+        finally:
+            app.destroy()
+
+    def test_error_line_keeps_the_technical_detail(self) -> None:
+        app = self._make_app()
+        try:
+            app._on_error("Unable to open microphone: PaErrorCode -9996")
+            (line,) = self._lines(app)
+            assert "Micrófono no disponible" in line
+            assert "PaErrorCode -9996" in line
+        finally:
+            app.destroy()
+
+    def test_model_sleep_and_wake_are_recorded(self) -> None:
+        import core.config as config
+        from unittest import mock
+
+        app = self._make_app()
+        try:
+            with mock.patch.object(config, "MODEL_UNLOAD_MIN", 10), \
+                 mock.patch.object(
+                     type(app._transcriber),
+                     "is_model_loaded",
+                     new_callable=mock.PropertyMock,
+                     return_value=True,
+                 ), \
+                 mock.patch.object(type(app._transcriber), "unload"):
+                app._unload_model_now()
+                app._on_model_loaded(app._transcriber, True, False, 2.1)
+
+            lines = self._lines(app)
+            assert "Modelo en reposo tras 10 min" in lines[0]
+            assert "Modelo listo (2.1 s)" in lines[1]
+        finally:
+            app.destroy()
+
+    def test_panel_is_read_only_and_bounded(self) -> None:
+        app = self._make_app()
+        try:
+            assert str(app._activity.cget("state")) == "disabled"
+            for i in range(app._ACTIVITY_KEEP + 25):
+                app._note(f"evento {i}")
+            lines = self._lines(app)
+            assert len(lines) == app._ACTIVITY_KEEP
+            assert lines[-1].endswith(f"evento {app._ACTIVITY_KEEP + 24}")
+            assert lines[0].endswith("evento 25")
+            assert str(app._activity.cget("state")) == "disabled"
+        finally:
+            app.destroy()
 
 
 class TestModelUnload:

@@ -58,7 +58,13 @@ No comprimas `dist\voz\` a mano: esa carpeta contiene también `data\` (todo lo 
 | **Botón Guardar como...** | Guarda el texto de la ventana en un `.txt` |
 | **Botón Configurar** | Idioma, micrófono, tecla rápida, pegado automático, sonidos |
 
-El área de texto solo contiene lo dictado y se puede editar libremente. El estado (grabando, transcribiendo, errores) se muestra en la barra inferior; el detalle técnico va a `data/voz.log`.
+La ventana tiene tres zonas:
+
+- **Área de texto:** solo lo dictado, editable libremente.
+- **Panel de actividad:** historial corto con hora de lo que fue pasando (grabando, cuánto se grabó, resultado y tiempo de proceso, modelo en reposo o recargado, errores con su detalle técnico).
+- **Barra de estado:** lo que pasa ahora mismo, con reloj en vivo: `Grabando... 1:19`, `Transcribiendo 3:59 de audio... llevas 0:23`, `Pegado — 3:59 de audio · 2656 caracteres · 1:06 de proceso`.
+
+El registro completo de la sesión queda en `data/voz.log`.
 
 ### Opciones (`config.json`)
 
